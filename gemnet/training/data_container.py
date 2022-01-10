@@ -82,7 +82,10 @@ class DataContainer:
 
         assert len(self.E) > 0
         assert len(self.F) > 0
+        self.process_attributes()
 
+
+    def process_attributes(self):
         self.E = self.E[:, None]  # shape=(nMolecules,1)
         self.N_cumsum = np.concatenate([[0], np.cumsum(self.N)])
 
@@ -155,6 +158,14 @@ class DataContainer:
 
     def __getitem__(self, idx):
         """
+        GYF: it is pretty slow to 
+        calculate these idxs and angles on the fly! 
+        It is nearly impossible to feed into the model.
+        For example, a data has 1964 atoms
+        would have id4_int_a in shape [288896], 
+        id4_expand_abd in shape [169469540]
+
+
         Parameters
         ----------
             idx: array-like
@@ -563,3 +574,55 @@ class DataContainer:
             indices[start:end] = a[:size]
             start = end
         return indices
+
+    def collate_fn(self, batch):
+        """
+        custom batching function because batches have variable shape
+        """
+        batch = batch[0]  # already batched
+        inputs = {}
+        targets = {}
+        for key in batch:
+            if key in self.targets:
+                targets[key] = batch[key]
+            else:
+                inputs[key] = batch[key]
+        return inputs, targets
+
+class PairDataContainer(object):
+    """
+    This class is a wrapper class of Data Container
+
+    """
+    def __init__(self, container1, container2):
+        self.container1 = container1
+        self.container2 = container2
+        assert len(container1) == len(container2)
+
+    def collate_fn(self, batch):
+        batch = batch[0]  # already batched
+        inputs = list()
+        targets = list()
+        for element in batch:
+            input = dict()
+            target = dict()
+            for key in element:
+                if key in self.targets:
+                    target[key] = element[key]
+                else:
+                    input[key] = element[key]
+            inputs.append(input)
+            targets.append(target)
+        return inputs, targets
+
+    def __len__(self):
+        return len(self.container1)
+
+    def __getattr__(self, name):   
+        try:
+            return super().__getattr__(name)
+        except AttributeError:
+            return getattr(self.container1, name)
+
+    def __getitem__(self, idx):
+        return [self.container1[idx], self.container2[idx]]

@@ -74,20 +74,6 @@ class Trainer:
         self.loss = loss
         self.agc = agc
 
-        if mve:
-            self.tracked_metrics = [
-                "loss",
-                "energy_mae",
-                "energy_nll",
-                "energy_var",
-                "force_mae",
-                "force_rmse",
-                "force_nll",
-                "force_var",
-            ]
-        else:
-            self.tracked_metrics = ["loss", "energy_mae", "force_mae", "force_rmse"]
-
         self.reset_optimizer(
             learning_rate,
             weight_decay,
@@ -99,6 +85,14 @@ class Trainer:
             decay_factor,
             decay_cooldown,
         )
+
+    @property
+    def tracked_metrics(self):
+        if self.mve:
+            return ["loss","energy_mae","energy_nll","energy_var", 
+                    "force_mae", "force_rmse", "force_nll", "force_var"]
+        else:
+            return ["loss", "energy_mae", "force_mae", "force_rmse"]
 
     def reset_optimizer(
         self,
@@ -746,3 +740,154 @@ class MultiWrapper:
         """
         for i, opt in enumerate(self.wrapped):
             opt.load_state_dict(state_dict[i])
+
+
+class DDGTrainer(Trainer):
+    """ Trainer for predicting ddG change between 
+    wild type and mutants. We use the difference between 
+    energy to measure the ddG change.
+
+    """
+
+    @property
+    def tracked_metrics(self):
+        if self.mve:
+            return ["loss","energy_mae","energy_nll","energy_var", 
+                    "force_mae", "force_rmse", "force_nll", "force_var", "spearman"]
+        else:
+            return ["loss", "energy_mae", "force_mae", "force_rmse", "spearman"]
+
+    def predict_on_batch(self, dataset_iter):
+        inputs, _ = next(dataset_iter)
+        outputs = []
+        for input_dict in inputs:
+            input_dict = self.dict2device(input_dict)
+            results = self.predict(input_dict)
+            outputs.append(results)
+        return outputs
+
+    def train_on_batch(self, dataset_iter, metrics):
+        """
+        GYF: we remove the force loss and metrics.
+        
+        """
+        self.model.train()
+        inputs, targets = next(dataset_iter)
+        inputs_wt, inputs_mt = inputs
+        targets = targets[0]
+        # push to GPU if available
+        inputs_wt, inputs_mt, targets = self.dict2device(inputs_wt), self.dict2device(inputs_mt), self.dict2device(targets)
+
+        mean_energy_wt, var_energy_wt, mean_forces_wt, var_forces_wt = self.predict(inputs_wt)
+        mean_energy_mt, var_energy_mt, mean_forces_mt, var_forces_mt = self.predict(inputs_mt)
+        mean_energy = mean_energy_mt - mean_energy_wt
+        var_energy = var_energy_mt
+
+        if self.mve:
+            energy_nll = self.get_nll(targets["E"], mean_energy, var_energy)
+            loss = energy_nll
+        else:
+            energy_mae = self.get_mae(targets["E"], mean_energy)
+            loss = energy_mae
+
+        self.optimizers.zero_grad()
+        loss.backward()
+        self.scale_shared_grads()
+
+        if self.agc:
+            self._adaptive_gradient_clipping(
+                self.params_except_last, clip_factor=self.grad_clip_max
+            )
+        else:
+            torch.nn.utils.clip_grad_norm_(
+                self.model.parameters(), max_norm=self.grad_clip_max
+            )
+
+        self.optimizers.step()
+        self.schedulers.step()
+        self.exp_decay.update()
+
+        # no gradients needed anymore
+        loss = loss.detach()
+        with torch.no_grad():
+            if self.mve:
+                energy_mae = self.get_mae(targets["E"], mean_energy)
+
+            if self.mve:
+                # update molecule metrics
+                metrics.update_state(
+                    nsamples=mean_energy.shape[0],
+                    loss=loss,
+                    energy_mae=energy_mae,
+                    energy_nll=energy_nll,
+                    energy_var=var_energy,
+                )
+
+            else:
+                # update molecule metrics
+                metrics.update_state(
+                    nsamples=mean_energy.shape[0],
+                    loss=loss,
+                    energy_mae=energy_mae,
+                )
+
+        return loss
+
+    def test_on_batch(self, dataset_iter, metrics):
+        """
+        GYF: again, no force, energy as ddG
+        """
+        self.model.eval()
+        inputs, targets = next(dataset_iter)
+        # push to GPU if available
+        inputs, targets = next(dataset_iter)
+        inputs_wt, inputs_mt = inputs
+        targets = targets[0]
+        # push to GPU if available
+        inputs_wt, inputs_mt, targets = self.dict2device(inputs_wt), self.dict2device(inputs_mt), self.dict2device(targets)
+
+        with torch.no_grad():
+            mean_energy_wt, var_energy_wt, mean_forces_wt, var_forces_wt = self.predict(inputs_wt)
+            mean_energy_mt, var_energy_mt, mean_forces_mt, var_forces_mt = self.predict(inputs_wt)
+            mean_energy = mean_energy_mt - mean_energy_wt
+            var_energy = var_energy_mt
+
+            energy_mae = self.get_mae(targets["E"], mean_energy)
+
+            if self.mve:
+                energy_nll = self.get_nll(targets["E"], mean_energy, var_energy)
+
+                # update molecule metrics
+                metrics.update_state(
+                    nsamples=mean_energy.shape[0],
+                    energy_mae=energy_mae,
+                    energy_nll=energy_nll,
+                    energy_var=var_energy,
+                )
+
+            else:
+                loss = energy_mae
+
+                # update molecule metrics
+                metrics.update_state(
+                    nsamples=mean_energy.shape[0],
+                    loss=loss,
+                    energy_mae=energy_mae,
+                )
+
+        return loss
+    
+    @torch.no_grad()
+    def eval_on_batch(self, dataset_iter):
+        self.model.eval()
+        inputs, targets = next(dataset_iter)
+        # push to GPU if available
+        inputs_wt, inputs_mt = inputs
+        targets = targets[0]
+        # push to GPU if available
+        inputs_wt, inputs_mt, targets = self.dict2device(inputs_wt), self.dict2device(inputs_mt), self.dict2device(targets)
+        mean_energy_wt, var_energy_wt, mean_forces_wt, var_forces_wt = self.predict(inputs_wt)
+        mean_energy_mt, var_energy_mt, mean_forces_mt, var_forces_mt = self.predict(inputs_wt)
+        mean_energy = mean_energy_mt - mean_energy_wt
+        var_energy = var_energy_mt
+        return mean_energy, targets

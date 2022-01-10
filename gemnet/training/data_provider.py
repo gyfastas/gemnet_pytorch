@@ -7,22 +7,6 @@ from torch.utils.data.sampler import (
     SequentialSampler,
 )
 
-
-def collate(batch, data_container):
-    """
-    custom batching function because batches have variable shape
-    """
-    batch = batch[0]  # already batched
-    inputs = {}
-    targets = {}
-    for key in batch:
-        if key in data_container.targets:
-            targets[key] = batch[key]
-        else:
-            inputs[key] = batch[key]
-    return inputs, targets
-
-
 class CustomDataLoader(DataLoader):
     def __init__(
         self, data_container, batch_size, indices, shuffle, seed=None, **kwargs
@@ -43,7 +27,7 @@ class CustomDataLoader(DataLoader):
         super().__init__(
             data_container,
             sampler=batch_sampler,
-            collate_fn=lambda x: collate(x, data_container),
+            collate_fn=data_container.collate_fn,
             pin_memory=True,  # load on CPU push to GPU
             **kwargs
         )

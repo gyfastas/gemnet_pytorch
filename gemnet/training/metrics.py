@@ -1,6 +1,8 @@
 import numpy as np
 import os
 import logging
+import torch
+from torch_scatter import scatter_mean
 
 
 class BestMetrics:
@@ -59,6 +61,10 @@ class BestMetrics:
         return self.state["loss_val"]
 
     @property
+    def spearman(self):
+        return self.state["spearman_val"]
+
+    @property
     def step(self):
         return self.state["step"]
 
@@ -72,7 +78,7 @@ class MeanMetric:
         self.sample_weights += sample_weight
 
     def result(self):
-        return self.values / self.sample_weights
+        return 0.0 if self.sample_weights==0 else self.values / self.sample_weights
 
     def reset_states(self):
         self.sample_weights = 0
@@ -151,9 +157,50 @@ class Metrics:
         result_dict = {}
         for key in self.keys:
             result_key = f"{key}_{self.tag}" if append_tag else key
-            result_dict[result_key] = self.mean_metrics[key].result().numpy().item()
+            if isinstance(self.mean_metrics[key].result(), torch.Tensor):
+                result_dict[result_key] = self.mean_metrics[key].result().numpy().item()
+            else:
+                result_dict[result_key] = self.mean_metrics[key].result()
         return result_dict
 
     @property
     def loss(self):
-        return self.mean_metrics["loss"].result().numpy().item()
+        if isinstance(self.mean_metrics["loss"].result(), torch.Tensor):
+            return self.mean_metrics["loss"].result().numpy().item()
+        else:
+            return self.mean_metrics["loss"].result()
+
+    @property
+    def spearman(self):
+        if isinstance(self.mean_metrics["spearman"].result(), torch.Tensor):
+            return self.mean_metrics["spearman"].result().numpy().item()
+        else:
+            return self.mean_metrics["spearman"].result()
+
+def spearmanr(pred, target, eps=1e-6):
+    """
+    Spearman correlation between target and prediction.
+    Implement in PyTorch, but non-diffierentiable. (validation metric only)
+    Parameters:
+        pred (Tensor): prediction of shape :math: `(N,)`
+        target (Tensor): target of shape :math: `(N,)`
+    """
+
+    def get_ranking(input):
+        input_set, input_inverse = input.unique(return_inverse=True)
+        order = input_inverse.argsort()
+        ranking = torch.zeros(len(input_inverse), device=input.device)
+        ranking[order] = torch.arange(1, len(input) + 1, dtype=torch.float, device=input.device)
+
+        # for elements that have the same value, replace their rankings with the mean of their rankings
+        mean_ranking = scatter_mean(ranking, input_inverse, dim=0, dim_size=len(input_set))
+        ranking = mean_ranking[input_inverse]
+        return ranking
+
+    pred = get_ranking(pred)
+    target = get_ranking(target)
+    covariance = (pred * target).mean() - pred.mean() * target.mean()
+    pred_std = pred.std(unbiased=False)
+    target_std = target.std(unbiased=False)
+    spearmanr = covariance / (pred_std * target_std + eps)
+    return spearmanr
