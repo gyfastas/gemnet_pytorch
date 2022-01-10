@@ -848,7 +848,7 @@ class DDGTrainer(Trainer):
 
         with torch.no_grad():
             mean_energy_wt, var_energy_wt, mean_forces_wt, var_forces_wt = self.predict(inputs_wt)
-            mean_energy_mt, var_energy_mt, mean_forces_mt, var_forces_mt = self.predict(inputs_wt)
+            mean_energy_mt, var_energy_mt, mean_forces_mt, var_forces_mt = self.predict(inputs_mt)
             mean_energy = mean_energy_mt - mean_energy_wt
             var_energy = var_energy_mt
 
@@ -887,7 +887,7 @@ class DDGTrainer(Trainer):
         # push to GPU if available
         inputs_wt, inputs_mt, targets = self.dict2device(inputs_wt), self.dict2device(inputs_mt), self.dict2device(targets)
         mean_energy_wt, var_energy_wt, mean_forces_wt, var_forces_wt = self.predict(inputs_wt)
-        mean_energy_mt, var_energy_mt, mean_forces_mt, var_forces_mt = self.predict(inputs_wt)
+        mean_energy_mt, var_energy_mt, mean_forces_mt, var_forces_mt = self.predict(inputs_mt)
         mean_energy = mean_energy_mt - mean_energy_wt
         var_energy = var_energy_mt
         return mean_energy, targets
