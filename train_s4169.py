@@ -25,7 +25,7 @@ os.environ["AUTOGRAPH_VERBOSITY"] = "1"
 
 def parse_args():
     parser = argparse.ArgumentParser("Running GemNet on ppi mutation change prediction task.")
-    parser.add_argument("--config", type=str, default="./configs/s4169.yaml", 
+    parser.add_argument("--config", type=str, default="./configs/s4169_cut4-8_bs1_thr8_decay450000.yaml", 
                         help="which config file to use")
     args, other_args = parser.parse_known_args()
     return args, other_args
@@ -154,6 +154,9 @@ extension = ".pth"
 log_path_model = f"{log_dir}/model{extension}"
 log_path_training = f"{log_dir}/training{extension}"
 best_path_model = f"{best_dir}/model{extension}"
+output_path = os.path.join(directory, "outputs")
+if not os.path.exists(output_path):
+    os.makedirs(output_path)
 
 logging.info("Initialize model")
 model = GemNet(
@@ -274,7 +277,7 @@ metrics_best_test.state["spearman_test"] = 0.0
 summary_writer = SummaryWriter(log_dir) # here is pretty slow
 steps_per_epoch = int(np.ceil(num_train / batch_size))
 
-for step in tqdm(range(step_init + 1, num_steps + 1)):
+for step in tqdm(range(step_init, num_steps + 1)):
 
     # keep track of the learning rate
     if step % 10 == 0:
@@ -323,12 +326,17 @@ for step in tqdm(range(step_init + 1, num_steps + 1)):
 
         # Update and save best result
         if validation["metrics"].spearman >= metrics_best.spearman:
-            logger.info("best spearman rho on valid update: {} => {}".format(metrics_best.spearman, validation["metrics"].spearman))
-            logger.info("spearman rho on test: {}".format(test["metrics"].spearman))
+            logging.info("best spearman rho on valid update: {} => {}".format(metrics_best.spearman, validation["metrics"].spearman))
+            logging.info("spearman rho on test: {}".format(test["metrics"].spearman))
             metrics_best.update(step, validation["metrics"])
             # metrics_best_test.update(step, test["metrics"])
 
             torch.save(model.state_dict(), best_path_model)
+            ## save prediction
+            logging.info("saving prediction and target on test set.")
+            output_dict = dict(pred=preds_test, target=targets_test)
+            torch.save(output_dict, os.path.join(output_path, "pred_{}.pth".format(step)))
+            
 
         # write to summary writer
         metrics_best.write(summary_writer, step)

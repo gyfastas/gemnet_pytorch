@@ -23,9 +23,14 @@ class CustomDataLoader(DataLoader):
         batch_sampler = BatchSampler(
             idx_sampler, batch_size=batch_size, drop_last=False
         )
+        # Note: a bug here if we do not use subset.
+        # Sequential sampler on subset returns index like (0, 1, 2, 3...)
+        # However, the returned index is on the full data. 
+        # If we do not take Subset here, it uses data from training subset. 
+        dataset = data_container if shuffle else Subset(data_container, indices)
 
         super().__init__(
-            data_container,
+            dataset ,
             sampler=batch_sampler,
             collate_fn=data_container.collate_fn,
             pin_memory=True,  # load on CPU push to GPU
