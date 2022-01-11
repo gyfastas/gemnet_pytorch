@@ -503,7 +503,7 @@ class Trainer:
         """
         trainer_dict = {
             key: value
-            for key, value in self.state_dict.items()
+            for key, value in self.state_dict().items()
             if key
             not in [
                 "model",
