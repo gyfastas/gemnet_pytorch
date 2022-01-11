@@ -326,7 +326,7 @@ for step in tqdm(range(step_init + 1, num_steps + 1)):
             logger.info("best spearman rho on valid update: {} => {}".format(metrics_best.spearman, validation["metrics"].spearman))
             logger.info("spearman rho on test: {}".format(test["metrics"].spearman))
             metrics_best.update(step, validation["metrics"])
-            metrics_best_test.update(step, test["metrics"])
+            # metrics_best_test.update(step, test["metrics"])
 
             torch.save(model.state_dict(), best_path_model)
 
@@ -352,6 +352,7 @@ for step in tqdm(range(step_init + 1, num_steps + 1)):
         validation["metrics"].write(summary_writer, step)
         train["metrics"].reset_states()
         validation["metrics"].reset_states()
+        test["metrics"].reset_states()
 
         # Restore backup variables
         trainer.restore_variable_backups()
