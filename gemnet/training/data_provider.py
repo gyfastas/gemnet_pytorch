@@ -1,6 +1,6 @@
 import numpy as np
 import torch
-from torch.utils.data import DataLoader, Subset
+from torch.utils.data import DataLoader, Subset, DistributedSampler
 from torch.utils.data.sampler import (
     BatchSampler,
     SubsetRandomSampler,
@@ -67,12 +67,14 @@ class DataProvider:
         random_split: bool = False,
         shuffle: bool = True,
         sample_with_replacement: bool = False,
+        num_workers: int = 0,
         **kwargs
     ):
         self.data_container = data_container
         self.batch_size = batch_size
         self.seed = seed
         self.shuffle = shuffle
+        self.num_workers = num_workers
         self.kwargs = kwargs
 
         # Random state parameter, such that random operations are reproducible if wanted
@@ -116,3 +118,19 @@ class DataProvider:
                     yield inputs, targets
 
         return generator()
+
+    def get_loader(self, split, batch_size=None):
+        assert split in self.idx
+        if batch_size is None:
+            batch_size = self.batch_size
+        shuffle = self.shuffle if split == "train" else False
+        return CustomDataLoader(self.data_container, batch_size=batch_size,
+            indices=self.idx[split], shuffle=shuffle, **self.kwargs)
+
+    def get_distributed_loader(self, split, world_size, rank, batch_size=None):
+        dataset = Subset(self.data_container, self.idx[split])
+        batch_size = batch_size if batch_size is not None else self.batch_size
+        sampler = DistributedSampler(dataset, world_size, rank)
+        loader = DataLoader(dataset, self.batch_size, sampler=sampler, num_workers=self.num_workers,
+                                collate_fn=self.data_container.collate_fn, pin_memory=True,)
+        return loader

@@ -19,10 +19,14 @@ class BestMetrics:
             If False log Warning and frehsly initilaize the metrics.
     """
 
-    def __init__(self, path, metrics, assert_exist=True):
+    def __init__(self, path, metrics, assert_exist=True, main_metric=None, metric_mode="max"):
         self.path = os.path.join(path, "best_metrics.npz")
         self.metrics = metrics
         self.assert_exist = assert_exist
+        self.main_metric_name = main_metric if main_metric in self.metrics.keys else self.metrics.keys[-1]
+        assert metric_mode in ["min", "max"]
+        self.metric_mode = metric_mode
+        
         self.state = {}
 
     def inititalize(self):
@@ -56,6 +60,14 @@ class BestMetrics:
             if key != "step":
                 summary_writer.add_scalar(key + "_best", val, step)
 
+    def is_best(self, metrics):
+        if self.metric_mode == "max":
+            return metrics.result(append_tag=False)[self.main_metric_name] > self.main_metric
+        elif self.metric_mode == "min":
+            return metrics.result(append_tag=False)[self.main_metric_name] < self.main_metric
+        else:
+            raise ValueError(f"metric mode error can only be max or min, but got {self.metric_mode}")
+
     @property
     def loss(self):
         return self.state["loss_val"]
@@ -67,6 +79,10 @@ class BestMetrics:
     @property
     def step(self):
         return self.state["step"]
+    
+    @property
+    def main_metric(self):
+        return self.state[f"{self.main_metric_name}_{self.metrics.tag}"] 
 
 
 class MeanMetric:

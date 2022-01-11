@@ -17,6 +17,7 @@ from .layers.efficient import EfficientInteractionDownProjection
 from .layers.atom_update_block import OutputBlock
 from .layers.scaling import ScalingFactor, AutomaticFit
 
+import pdb
 
 class GemNet(torch.nn.Module):
     """
@@ -788,3 +789,35 @@ class GemNet(torch.nn.Module):
     
     def save_weights(self, path):
         torch.save(self.state_dict(), path)
+
+    def scale_shared_grads(self):
+        """Divide the gradients of the layers that are shared across multiple blocks
+        by the number the weights are shared for
+
+        GYF: this function is applied on model only. So we move it from trainer to 
+        model.
+        """
+        with torch.no_grad():
+            def scale_grad(param, scale_factor):
+                if param.grad is None:
+                    return
+                g_data = param.grad
+                new_grads = g_data / scale_factor
+                param.grad.copy_(new_grads)
+
+            shared_int_layers = [
+                self.mlp_rbf3,
+                self.mlp_cbf3,
+                self.mlp_rbf_h,
+            ]
+            if not self.triplets_only:
+                shared_int_layers += [
+                    self.mlp_rbf4,
+                    self.mlp_cbf4,
+                    self.mlp_sbf4,
+                ]
+
+            for layer in shared_int_layers:
+                scale_grad(layer.weight, self.num_blocks)
+            # output block is shared for +1 blocks
+            scale_grad(self.mlp_rbf_out.weight, self.num_blocks + 1)
