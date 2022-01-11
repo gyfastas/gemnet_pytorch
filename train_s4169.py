@@ -268,6 +268,9 @@ else:
     metrics_best.inititalize()
     step_init = 0
 
+metrics_best.state["spearman_val"] = 0.0
+metrics_best_test.state["spearman_test"] = 0.0
+
 summary_writer = SummaryWriter(log_dir) # here is pretty slow
 steps_per_epoch = int(np.ceil(num_train / batch_size))
 
