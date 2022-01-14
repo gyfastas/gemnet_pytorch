@@ -654,4 +654,86 @@ class DDGTrainer(Trainer):
         rho = metrics.spearmanr(pred, targets)
         metric_dict["spearman"] = rho
         metric_dict["nsamples"] = pred.shape[0]
-        return metric_dict 
+        return metric_dict
+
+
+class EBMTrainer(Trainer):
+    """
+    Trainer for energy-based model.
+    We contrast between positive side chain conformations with negative side chain conformations.
+    """
+
+    def __init__(
+            self,
+            model,
+            learning_rate: float = 1e-3,
+            decay_steps: int = 100000,
+            decay_rate: float = 0.96,
+            warmup_steps: int = 0,
+            weight_decay: float = 0.001,
+            staircase: bool = False,
+            grad_clip_max: float = 1000,
+            decay_patience: int = 10,  # decay lr on plateau by decay_factor
+            decay_factor: float = 0.5,
+            decay_cooldown: int = 10,
+            ema_decay: float = 0.999,
+            rho_force: float = 0.99,
+            loss: str = "mae",  # else use rmse
+            mve: bool = False,
+            agc=False,
+            num_negative: int = 1
+    ):
+        super(EBMTrainer, self).__init__(model, learning_rate, decay_steps, decay_rate, warmup_steps, weight_decay,
+                                         staircase, grad_clip_max, decay_patience, decay_factor, decay_cooldown,
+                                         ema_decay, rho_force, loss, mve, agc)
+        self.num_negative = num_negative
+
+    @property
+    def tracked_metrics(self):
+        return ["loss", "energy_mae", "force_mae", "force_rmse", "log_likelihood"]
+
+    def get_log_likelihood(self, all_energy, eps=1e-6):
+        all_energy = all_energy.view(-1).view(self.num_negative + 1, -1)  # (N_neg + 1, B)
+        unnormalized_likelihood = torch.exp(-all_energy)
+        positive_likelihood = unnormalized_likelihood[0, :]
+        sum_likelihood = unnormalized_likelihood.sum(0)
+        log_likelihood = torch.log(positive_likelihood / (sum_likelihood + eps)).mean()
+        return log_likelihood
+
+    def forwrad_and_backward(self, model, metrics, inputs, targets):
+        inputs, targets = self.dict2device(inputs), self.dict2device(targets)
+        mean_energy, var_energy, mean_forces, var_forces = self.predict(inputs, model)
+        energy_mae = self.get_mae(targets["E"], mean_energy)
+        force_mae = self.get_mae(targets["F"], mean_forces)
+        log_likelihood = self.get_log_likelihood(mean_energy)
+        loss = -log_likelihood + 0.0 * energy_mae + 0.0 * force_mae
+
+        self.optimizers.zero_grad()
+        loss.backward()
+        self.model.scale_shared_grads()
+
+        if self.agc:
+            training_utils.adaptive_gradient_clipping(
+                self.params_except_last, clip_factor=self.grad_clip_max
+            )
+        else:
+            torch.nn.utils.clip_grad_norm_(
+                self.model.parameters(), max_norm=self.grad_clip_max
+            )
+
+        self.optimizers.step()
+        self.schedulers.step()
+        self.exp_decay.update()
+
+        # no gradients needed anymore
+        loss = loss.detach()
+        log_likelihood = log_likelihood.detach()
+        with torch.no_grad():
+            # update molecule metrics
+            metrics.update_state(
+                nsamples=mean_energy.shape[0] // (self.num_negative + 1),
+                loss=loss,
+                log_likelihood=log_likelihood
+            )
+
+        return loss
