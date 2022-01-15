@@ -4,8 +4,7 @@ import numpy as np
 import scipy.sparse as sp
 import numba
 import torch
-from rotamer_utils import RotamerBase
-
+from gemnet.training.rotamer_utils import RotamerBase
 
 class DataContainer:
     """
@@ -32,9 +31,6 @@ class DataContainer:
         triplets_only=False,
         transforms=None,
         addID=False,
-        num_neighbors=64,
-        num_negative=1,
-        rotamer_library_path="./data/dunbrack-rotamer/original"
     ):
         self.index_keys = [
             "batch_seg",
@@ -64,10 +60,7 @@ class DataContainer:
         self.cutoff = cutoff
         self.int_cutoff = int_cutoff
         self.addID = addID
-        self.num_neighbors = num_neighbors
-        self.num_negative = num_negative
-        self.rotamer = RotamerBase(library_path=rotamer_library_path)
-        self.keys = ["N", "Z", "R", "F", "E", "residue_ids", "residue_types", "atom_ids"]
+        self.keys = ["N", "Z", "R", "F", "E"]
         if addID:
             self.keys += ["id"]
 
@@ -88,13 +81,11 @@ class DataContainer:
         assert self.Z is not None
         assert self.E is not None
         assert self.F is not None
-        assert self.residue_ids is not None  # (N_atoms,)
-        assert self.residue_types is not None  # (N_residues,)
-        assert self.atom_ids is not None   # (N_atoms,)
 
         assert len(self.E) > 0
         assert len(self.F) > 0
         self.process_attributes()
+
 
     def process_attributes(self):
         self.E = self.E[:, None]  # shape=(nMolecules,1)
@@ -106,14 +97,12 @@ class DataContainer:
 
     def _load_npz(self, path, keys):
         """Load the keys from the file and set as attributes.
-
         Parameters
         ----------
         path: str
             Absolute path of the dataset (in npz-format).
         keys: list
             Contains keys in the dataset to load and set as attributes.
-
         Returns
         -------
         None
@@ -129,12 +118,10 @@ class DataContainer:
     @staticmethod
     def _bmat_fast(mats):
         """Combines multiple adjacency matrices into single sparse block matrix.
-
         Parameters
         ----------
             mats: list
                 Has adjacency matrices as elements.
-
         Returns
         -------
             adj_matrix: sp.csr_matrix
@@ -163,6 +150,9 @@ class DataContainer:
             return sp.csr_matrix(shape)
 
         return sp.csr_matrix((new_data, new_indices, new_indptr), shape=shape)
+
+    def __len__(self):
+        return len(self.N)
 
     def append_graph_indices(self, data, adj_matrices, adj_matrices_int):
         #### Indices of the moleule structure
@@ -287,200 +277,9 @@ class DataContainer:
         idx_data["id4_expand_intm_db"] = id4_expand_intm_db  # (intmTriplets,)
         idx_data["id4_reduce_intm_ab"] = id4_reduce_intm_ab  # (intmTriplets,)
         idx_data["id4_expand_intm_ab"] = id4_expand_intm_ab  # (intmTriplets,)
-
-        # # node indices in quadruplet
-        # idx_c = idx_s[id4_reduce_ca]
-        # idx_a = idx_t[id4_reduce_ca]
-        # idx_b = idx_t[id4_expand_db]
-        # idx_d = idx_s[id4_expand_db]
-        # assert np.all(idx_c == idx_s[id4_reduce_intm_ca][id4_reduce_cab])
-        # assert np.all(idx_a == idx_t[id4_reduce_intm_ca][id4_reduce_cab])
-        # assert np.all(idx_a == idx_int_t[id4_reduce_intm_ab][id4_reduce_cab])
-        # assert np.all(idx_a == idx_int_t[id4_expand_intm_ab][id4_expand_abd])
-        # assert np.all(idx_b == idx_int_s[id4_reduce_intm_ab][id4_reduce_cab])
-        # assert np.all(idx_b == idx_int_s[id4_expand_intm_ab][id4_expand_abd])
-        # assert np.all(idx_b == idx_t[id4_expand_intm_db][id4_expand_abd])
-        # assert np.all(idx_d == idx_s[id4_expand_intm_db][id4_expand_abd])
-
+        idx_data = {k:v for k,v in idx_data.items() if v is not None}
         data.update(idx_data)
         return data
-
-    def sample_residue(self, idx):
-        sampled_residues = np.zeros(len(idx), dtype=np.int32)
-        for k, protein_id in enumerate(idx):
-            start = self.N_cumsum[protein_id]
-            end = self.N_cumsum[protein_id + 1]
-            residue_ids = self.residue_ids[start:end]
-            # We sample from all the residues of a protein except the first and last ones
-            residue_ids = np.arange(residue_ids[0] + 1, residue_ids[-1])
-            residue_types = self.residue_types[residue_ids[0]:residue_ids[-1]]
-            in_library = residue_types < len(self.rotamer.amino_acids)
-            residue_ids = residue_ids[in_library]
-            sampled_residue = random.sample(residue_ids, 1)[0]
-            sampled_residues[k] = sampled_residue
-        return sampled_residues
-
-    def get_topk_atoms(self, protein_id, residue_id, num_atom, new_atom_positions=None, upper_dist=1e6):
-        start = self.N_cumsum[protein_id]
-        end = self.N_cumsum[protein_id + 1]
-        atom_positions = new_atom_positions if new_atom_positions is not None else self.R[start:end]
-        residue_ids = self.residue_ids[start:end]
-        atom_ids = self.atom_ids[start:end]
-        target_residue_CB = (residue_ids == residue_id) & (atom_ids == 4)
-        target_residue_CB_position = atom_positions[target_residue_CB]
-        assert target_residue_CB_position.shape[0] == 1
-        all_dist = ((atom_positions - target_residue_CB_position) ** 2).sum(-1)
-        is_target_residue = (residue_ids == residue_id)
-        all_dist[is_target_residue] = upper_dist
-        topk_indices = np.argsort(all_dist)[:num_atom] + start
-        return topk_indices
-
-    def compute_Phi(self, atom_positions, residue_ids, atom_ids, target_residue_id):
-        C_before_position = atom_positions[(residue_ids == target_residue_id - 1) & (atom_ids == 2)]
-        N_target_position = atom_positions[(residue_ids == target_residue_id) & (atom_ids == 0)]
-        CA_target_position = atom_positions[(residue_ids == target_residue_id) & (atom_ids == 1)]
-        C_target_position = atom_positions[(residue_ids == target_residue_id) & (atom_ids == 2)]
-        assert C_before_position.shape[0] == 1 and N_target_position.shape[0] == 1 \
-               and CA_target_position.shape[0] == 1 and C_target_position.shape[0] == 1
-        Phi = self.rotamer.compute_dihedral(C_before_position, N_target_position, CA_target_position,
-                                            C_target_position)[0]
-        return Phi
-
-    def compute_Psi(self, atom_positions, residue_ids, atom_ids, target_residue_id):
-        N_target_position = atom_positions[(residue_ids == target_residue_id) & (atom_ids == 0)]
-        CA_target_position = atom_positions[(residue_ids == target_residue_id) & (atom_ids == 1)]
-        C_target_position = atom_positions[(residue_ids == target_residue_id) & (atom_ids == 2)]
-        N_next_position = atom_positions[(residue_ids == target_residue_id + 1) & (atom_ids == 0)]
-        assert N_target_position.shape[0] == 1 and CA_target_position.shape[0] == 1 \
-               and C_target_position.shape[0] == 1 and N_next_position.shape[0] == 1
-        Psi = self.rotamer.compute_dihedral(N_target_position, CA_target_position, C_target_position,
-                                            N_next_position)[0]
-        return Psi
-
-    def compute_Chis(self, atom_positions, residue_ids, atom_ids, target_residue_id):
-        target_residue_name = self.rotamer.amino_acids[self.residue_types[target_residue_id]]
-        Chis = np.zeros(4, dtype=np.float32)
-        for Chi_id, Chi_atoms in enumerate(self.rotamer.chis_atoms[target_residue_name]):
-            atom_1, atom_2, atom_3, atom_4 = Chi_atoms
-            atom_1_position = atom_positions[(residue_ids == target_residue_id) & (atom_ids == atom_1)]
-            atom_2_position = atom_positions[(residue_ids == target_residue_id) & (atom_ids == atom_2)]
-            atom_3_position = atom_positions[(residue_ids == target_residue_id) & (atom_ids == atom_3)]
-            atom_4_position = atom_positions[(residue_ids == target_residue_id) & (atom_ids == atom_4)]
-            assert atom_1_position.shape[0] == 1 and atom_2_position.shape[0] == 1 and \
-                   atom_3_position.shape[0] == 1 and atom_4_position.shape[0] == 1
-            Chi = self.rotamer.compute_dihedral(atom_1_position, atom_2_position, atom_3_position, atom_4_position)[0]
-            Chis[Chi_id] = Chi
-        return Chis
-
-    def rotate_single_side_chain(self, protein_id, residue_id):
-        start = self.N_cumsum[protein_id]
-        end = self.N_cumsum[protein_id + 1]
-        atom_positions = self.R[start:end]
-        residue_ids = self.residue_ids[start:end]
-        atom_ids = self.atom_ids[start:end]
-
-        # Compute Phi, Psi and Chis; Sample new Chis based on the rotamer library
-        Phi = self.compute_Phi(atom_positions, residue_ids, atom_ids, residue_id)  # scalar
-        Psi = self.compute_Psi(atom_positions, residue_ids, atom_ids, residue_id)  # scalar
-        Chis = self.compute_Chis(atom_positions, residue_ids, atom_ids, residue_id)  # (4,)
-        target_Chis = self.rotamer.sample_chis(Phi, Psi,
-                                               self.rotamer.amino_acids[self.residue_types[residue_id]])  # (4,)
-
-        # Rotate side chain according to the sampled Chis
-        atom_positions_ = atom_positions[residue_ids == residue_id]
-        atom_ids_ = atom_ids[residue_ids == residue_id]
-        residue_name = self.rotamer.amino_acids[self.residue_types[residue_id]]
-        all_chi_atoms = self.rotamer.chis_atoms[residue_name]
-        rotated_atom_positions_ = self.rotamer.rotate_side_chain(Chis, target_Chis,
-                                                                 atom_positions_, atom_ids_, all_chi_atoms)
-        rotated_atom_positions = copy.deepcopy(atom_positions)
-        rotated_atom_positions[residue_ids == residue_id] = rotated_atom_positions_
-        return rotated_atom_positions
-
-    def get_positive_data(self, idx):
-        data = {}
-        if self.addID:
-            data["id"] = self.id[idx]
-        data["E"] = self.E[idx]
-        data["N"] = np.min(np.stack([self.N[idx], np.full(len(idx), self.num_neighbors, dtype=np.int32)],
-                                    axis=1), axis=1)
-        data["batch_seg"] = np.repeat(np.arange(len(idx), dtype=np.int32), data["N"])
-        data["Z"] = np.zeros(np.sum(data["N"]), dtype=np.int32)
-        data["R"] = np.zeros([np.sum(data["N"]), 3], dtype=np.float32)
-        data["F"] = np.zeros([np.sum(data["N"]), 3], dtype=np.float32)
-        data["sampled_residue"] = self.sample_residue(idx)
-
-        nend = 0
-        adj_matrices = []
-        adj_matrices_int = []
-        for protein_id, residue_id, num_atom in zip(idx, data["sampled_residue"], data["N"]):
-            topk_indices = self.get_topk_atoms(protein_id, residue_id, num_atom)
-            nstart = nend
-            nend = nstart + num_atom
-            data["F"][nstart:nend] = self.F[topk_indices]
-            data["Z"][nstart:nend] = self.Z[topk_indices]
-            R = self.R[topk_indices]
-            data["R"][nstart:nend] = R
-
-            D_ij = np.linalg.norm(R[:, None, :] - R[None, :, :], axis=-1)
-            # get adjacency matrix for embeddings
-            adj_mat = sp.csr_matrix(D_ij <= self.cutoff)
-            adj_mat -= sp.eye(num_atom, dtype=np.bool)
-            adj_matrices.append(adj_mat)
-
-            if not self.triplets_only:
-                # get adjacency matrix for interaction
-                adj_mat = sp.csr_matrix(D_ij <= self.int_cutoff)
-                adj_mat -= sp.eye(num_atom, dtype=np.bool)
-                adj_matrices_int.append(adj_mat)
-
-        return data, adj_matrices, adj_matrices_int
-
-    def get_negative_data(self, positive_data, idx):
-        all_negative_data = []
-        adj_matrices = []
-        adj_matrices_int = []
-        for negative_id in range(self.num_negative):
-            negative_data = {}
-            if self.addID:
-                negative_data["id"] = positive_data["id"]
-            negative_data["E"] = positive_data["E"]
-            negative_data["N"] = positive_data["N"]
-            negative_data["batch_seg"] = positive_data["batch_seg"] + len(idx) * (negative_id + 1)
-            negative_data["sampled_residue"] = positive_data["sampled_residue"]
-            negative_data["Z"] = np.zeros(np.sum(negative_data["N"]), dtype=np.int32)
-            negative_data["R"] = np.zeros([np.sum(negative_data["N"]), 3], dtype=np.float32)
-            negative_data["F"] = np.zeros([np.sum(negative_data["N"]), 3], dtype=np.float32)
-
-            nend = 0
-            for protein_id, residue_id, num_atom in zip(idx, negative_data["sampled_residue"], negative_data["N"]):
-                rotated_atom_positions = self.rotate_single_side_chain(protein_id, residue_id)
-                topk_indices = self.get_topk_atoms(protein_id, residue_id, num_atom,
-                                                   new_atom_positions=rotated_atom_positions)
-                nstart = nend
-                nend = nstart + num_atom
-                negative_data["F"][nstart:nend] = self.F[topk_indices]
-                negative_data["Z"][nstart:nend] = self.Z[topk_indices]
-                R = rotated_atom_positions[topk_indices - self.N_cumsum[protein_id]]
-                negative_data["R"][nstart:nend] = R
-
-                D_ij = np.linalg.norm(R[:, None, :] - R[None, :, :], axis=-1)
-                # get adjacency matrix for embeddings
-                adj_mat = sp.csr_matrix(D_ij <= self.cutoff)
-                adj_mat -= sp.eye(num_atom, dtype=np.bool)
-                adj_matrices.append(adj_mat)
-
-                if not self.triplets_only:
-                    # get adjacency matrix for interaction
-                    adj_mat = sp.csr_matrix(D_ij <= self.int_cutoff)
-                    adj_mat -= sp.eye(num_atom, dtype=np.bool)
-                    adj_matrices_int.append(adj_mat)
-            all_negative_data.append(negative_data)
-
-        return all_negative_data, adj_matrices, adj_matrices_int
-
-    def __len__(self):
-        return len(self.N)
 
     def __getitem__(self, idx):
         """
@@ -490,20 +289,16 @@ class DataContainer:
         For example, a data has 1964 atoms
         would have id4_int_a in shape [288896], 
         id4_expand_abd in shape [169469540]
-
-
         Parameters
         ----------
             idx: array-like
                 Ids of the molecules to get.
-
         Returns
         -------
             data: dict
                 nMolecules = len(idx)
                 nAtoms = total sum of atoms in the selected molecules
                 Contains following keys and values:
-
                 - id: np.ndarray, shape (nMolecules,)
                     Ids of the molecules in the dataset.
                 - N: np.ndarray, shape (nMolecules,)
@@ -564,31 +359,48 @@ class DataContainer:
         if isinstance(idx, slice):
             idx = np.arange(idx.start, min(idx.stop, len(self)), idx.step)
 
-        # Get the positive conformation
-        all_data = []
-        all_adj_matrices = []
-        all_adj_matrices_int = []
-        positive_data, positive_adj_matrices, positive_adj_matrices_int = self.get_positive_data(idx)
-        all_data.append(positive_data)
-        all_adj_matrices.append(positive_adj_matrices)
-        all_adj_matrices_int.append(positive_adj_matrices_int)
-
-        # Get the negative conformations
-        negative_data, negative_adj_matrices, negative_adj_matrices_int = self.get_negative_data(positive_data, idx)
-        all_data += negative_data
-        all_adj_matrices += negative_adj_matrices
-        all_adj_matrices_int += negative_adj_matrices_int
-
-        # Pack positive and negative data
         data = {}
-        for key in positive_data:
-            value = np.concatenate([data_[key] for data_ in all_data], axis=0)
-            data[key] = value
+        if self.addID:
+            data["id"] = self.id[idx]
+        data["E"] = self.E[idx]
+        data["N"] = self.N[idx]
+        data["batch_seg"] = np.repeat(np.arange(len(idx), dtype=np.int32), data["N"])
 
-        # Graph construction
-        data = self.append_graph_indices(data, all_adj_matrices, all_adj_matrices_int)
-        data = self.convert_to_tensor(data)
-        return data
+        data["Z"] = np.zeros(np.sum(data["N"]), dtype=np.int32)
+        data["R"] = np.zeros([np.sum(data["N"]), 3], dtype=np.float32)
+        data["F"] = np.zeros([np.sum(data["N"]), 3], dtype=np.float32)
+
+        nend = 0
+        adj_matrices = []
+        adj_matrices_int = []
+        for k, i in enumerate(idx):
+            n = data["N"][k]
+            nstart = nend
+            nend = nstart + n
+            s, e = (
+                self.N_cumsum[i],
+                self.N_cumsum[i + 1],
+            )  # start and end idx of atoms belonging to molecule
+
+            data["F"][nstart:nend] = self.F[s:e]
+            data["Z"][nstart:nend] = self.Z[s:e]
+            R = self.R[s:e]
+            data["R"][nstart:nend] = R
+
+            D_ij = np.linalg.norm(R[:, None, :] - R[None, :, :], axis=-1)
+            # get adjacency matrix for embeddings
+            adj_mat = sp.csr_matrix(D_ij <= self.cutoff)
+            adj_mat -= sp.eye(n, dtype=np.bool)
+            adj_matrices.append(adj_mat)
+
+            if not self.triplets_only:
+                # get adjacency matrix for interaction
+                adj_mat = sp.csr_matrix(D_ij <= self.int_cutoff)
+                adj_mat -= sp.eye(n, dtype=np.bool)
+                adj_matrices_int.append(adj_mat)
+
+        data = self.append_graph_indices(data, adj_matrices, adj_matrices_int)
+        return self.convert_to_tensor(data)
 
     @staticmethod
     def get_triplets(idx_s, idx_t, edge_ids):
@@ -705,7 +517,6 @@ class DataContainer:
     def repeat_blocks(sizes, repeats):
         """Repeat blocks of indices.
         From https://stackoverflow.com/questions/51154989/numpy-vectorized-function-to-repeat-blocks-of-consecutive-elements
-
         Examples
         --------
             sizes = [1,3,2] ; repeats = [3,2,3]
@@ -761,6 +572,368 @@ class DataContainer:
                 inputs[key] = batch[key]
         return inputs, targets
 
+class PairDataContainer(object):
+    """
+    This class is a wrapper class of Data Container
+    """
+    def __init__(self, container1, container2):
+        self.container1 = container1
+        self.container2 = container2
+        assert len(container1) == len(container2)
+
+    def collate_fn(self, batch):
+        batch = batch[0]  # already batched
+        inputs = list()
+        targets = list()
+        for element in batch:
+            input = dict()
+            target = dict()
+            for key in element:
+                if key in self.targets:
+                    target[key] = element[key]
+                else:
+                    input[key] = element[key]
+            inputs.append(input)
+            targets.append(target)
+        return inputs, targets
+
+    def __len__(self):
+        return len(self.container1)
+
+    def __getattr__(self, name):   
+        try:
+            return super().__getattr__(name)
+        except AttributeError:
+            return getattr(self.container1, name)
+
+    def __getitem__(self, idx):
+        return [self.container1[idx], self.container2[idx]]
+
+
+class EBMDataContainer(DataContainer):
+    """
+    Data Container for EBM Training
+    """
+    def __init__(
+        self,
+        path,
+        cutoff,
+        int_cutoff,
+        triplets_only=False,
+        transforms=None,
+        addID=False,
+        num_neighbors=64,
+        num_negative=1,
+        rotamer_library_path="./data/dunbrack-rotamer/original"
+    ):
+        self.index_keys = [
+            "batch_seg",
+            "id_undir",
+            "id_swap",
+            "id_c",
+            "id_a",
+            "id3_expand_ba",
+            "id3_reduce_ca",
+            "Kidx3",
+            "sampled_residue",
+            "residue_ids", 
+            "residue_types", 
+            "atom_ids"
+        ]
+        if not triplets_only:
+            self.index_keys += [
+                "id4_int_b",
+                "id4_int_a",
+                "id4_reduce_ca",
+                "id4_expand_db",
+                "id4_reduce_cab",
+                "id4_expand_abd",
+                "Kidx4",
+                "id4_reduce_intm_ca",
+                "id4_expand_intm_db",
+                "id4_reduce_intm_ab",
+                "id4_expand_intm_ab",
+            ]
+        self.triplets_only = triplets_only
+        self.cutoff = cutoff
+        self.int_cutoff = int_cutoff
+        self.addID = addID
+        self.num_neighbors = num_neighbors
+        self.num_negative = num_negative
+        self.rotamer = RotamerBase(library_path=rotamer_library_path)
+        self.keys = ["N", "Z", "R", "F", "E", "residue_ids", "residue_types", "atom_ids"]
+        if addID:
+            self.keys += ["id"]
+
+        self._load_npz(path, self.keys)  # set keys as attributes
+
+        if transforms is None:
+            self.transforms = []
+        else:
+            assert isinstance(transforms, (list, tuple))
+            self.transforms = transforms
+
+        # modify dataset
+        for transform in self.transforms:
+            transform(self)
+
+        assert self.R is not None
+        assert self.N is not None
+        assert self.Z is not None
+        assert self.E is not None
+        assert self.F is not None
+        assert self.residue_ids is not None  # (N_atoms,)
+        assert self.residue_types is not None  # (N_residues,)
+        assert self.atom_ids is not None   # (N_atoms,)
+
+        assert len(self.E) > 0
+        assert len(self.F) > 0
+        self.process_attributes()
+
+    def sample_residue(self, idx):
+        """
+        Return sampled residues. 
+        If no valid residue, the default value is -1.
+        """
+        sampled_residues = np.full(len(idx), -1, dtype=np.int32)
+        for k, protein_id in enumerate(idx):
+            start = self.N_cumsum[protein_id]
+            end = self.N_cumsum[protein_id + 1]
+            residue_ids = self.residue_ids[start:end]
+            # We sample from all the residues of a protein except the first and last ones
+            residue_start, residue_end = residue_ids[0] + 1, residue_ids[-1]
+            residue_index_range = np.arange(residue_start, residue_end) # [N_residue-2, ]
+            residue_types = self.residue_types[residue_start:residue_end] # [N_residue-2, ]
+            in_library = residue_types < len(self.rotamer.amino_acids)
+            assert in_library.sum() > 0 # if none of the residues are in lib, then raise error
+            residue_index_range = residue_index_range[in_library]
+            sampled_residue_index = np.random.choice(residue_index_range, 1)[0]
+            # return the index of the residue rather than the type of the residue
+            sampled_residues[k] = sampled_residue_index
+        return sampled_residues
+
+    def get_topk_atoms(self, protein_id, residue_id, num_atom, new_atom_positions=None, upper_dist=1e6):
+        """
+        Paramters:
+            protein_id: (int)
+            residue_id: (int) the index of the sampled residue in the data array (not the type of the residue)
+            num_atom: (int) selected num atom 
+        """
+        start = self.N_cumsum[protein_id]
+        end = self.N_cumsum[protein_id + 1]
+        atom_positions = new_atom_positions if new_atom_positions is not None else self.R[start:end]
+        residue_ids = self.residue_ids[start:end]
+        atom_ids = self.atom_ids[start:end]
+        target_residue_CB = (residue_ids == residue_id) & (atom_ids == 4)
+        target_residue_CB_position = atom_positions[target_residue_CB]
+        assert target_residue_CB_position.shape[0] == 1
+        all_dist = ((atom_positions - target_residue_CB_position) ** 2).sum(-1)
+        is_target_residue = (residue_ids == residue_id)
+        all_dist[is_target_residue] = upper_dist
+        topk_indices = np.argsort(all_dist)[:num_atom] + start
+        return topk_indices
+
+    def compute_Phi(self, atom_positions, residue_ids, atom_ids, target_residue_id):
+        """
+        Paramters:
+            atom_positions: [N_atoms, 3]
+            residue_ids: [N_atoms,]
+            atom_ids: [N_atoms,]
+            target_residue_id: (int) 
+        """
+        C_before_position = atom_positions[(residue_ids == target_residue_id - 1) & (atom_ids == 2)]
+        N_target_position = atom_positions[(residue_ids == target_residue_id) & (atom_ids == 0)]
+        CA_target_position = atom_positions[(residue_ids == target_residue_id) & (atom_ids == 1)]
+        C_target_position = atom_positions[(residue_ids == target_residue_id) & (atom_ids == 2)]
+        assert C_before_position.shape[0] == 1 and N_target_position.shape[0] == 1 \
+               and CA_target_position.shape[0] == 1 and C_target_position.shape[0] == 1
+        Phi = self.rotamer.compute_dihedral(C_before_position, N_target_position, CA_target_position,
+                                            C_target_position)[0]
+        return Phi
+
+    def compute_Psi(self, atom_positions, residue_ids, atom_ids, target_residue_id):
+        N_target_position = atom_positions[(residue_ids == target_residue_id) & (atom_ids == 0)]
+        CA_target_position = atom_positions[(residue_ids == target_residue_id) & (atom_ids == 1)]
+        C_target_position = atom_positions[(residue_ids == target_residue_id) & (atom_ids == 2)]
+        N_next_position = atom_positions[(residue_ids == target_residue_id + 1) & (atom_ids == 0)]
+        assert N_target_position.shape[0] == 1 and CA_target_position.shape[0] == 1 \
+               and C_target_position.shape[0] == 1 and N_next_position.shape[0] == 1
+        Psi = self.rotamer.compute_dihedral(N_target_position, CA_target_position, C_target_position,
+                                            N_next_position)[0]
+        return Psi
+
+    def compute_Chis(self, atom_positions, residue_ids, atom_ids, target_residue_id):
+        target_residue_name = self.rotamer.amino_acids[self.residue_types[target_residue_id]]
+        Chis = np.zeros(4, dtype=np.float32)
+        for Chi_id, Chi_atoms in enumerate(self.rotamer.chis_atoms[target_residue_name]):
+            atom_1, atom_2, atom_3, atom_4 = Chi_atoms
+            atom_1_position = atom_positions[(residue_ids == target_residue_id) & (atom_ids == atom_1)]
+            atom_2_position = atom_positions[(residue_ids == target_residue_id) & (atom_ids == atom_2)]
+            atom_3_position = atom_positions[(residue_ids == target_residue_id) & (atom_ids == atom_3)]
+            atom_4_position = atom_positions[(residue_ids == target_residue_id) & (atom_ids == atom_4)]
+            assert atom_1_position.shape[0] == 1 and atom_2_position.shape[0] == 1 and \
+                   atom_3_position.shape[0] == 1 and atom_4_position.shape[0] == 1
+            Chi = self.rotamer.compute_dihedral(atom_1_position, atom_2_position, atom_3_position, atom_4_position)[0]
+            Chis[Chi_id] = Chi
+        return Chis
+
+    def rotate_single_side_chain(self, protein_id, residue_id):
+        start = self.N_cumsum[protein_id]
+        end = self.N_cumsum[protein_id + 1]
+        atom_positions = self.R[start:end]
+        residue_ids = self.residue_ids[start:end]
+        atom_ids = self.atom_ids[start:end]
+
+        # Compute Phi, Psi and Chis; Sample new Chis based on the rotamer library
+        Phi = self.compute_Phi(atom_positions, residue_ids, atom_ids, residue_id)  # scalar
+        Psi = self.compute_Psi(atom_positions, residue_ids, atom_ids, residue_id)  # scalar
+        Chis = self.compute_Chis(atom_positions, residue_ids, atom_ids, residue_id)  # (4,)
+        target_Chis = self.rotamer.sample_chis(Phi, Psi,
+                                                self.rotamer.amino_acids[self.residue_types[residue_id]])  # (4,)
+
+        # Rotate side chain according to the sampled Chis
+        atom_positions_ = atom_positions[residue_ids == residue_id]
+        atom_ids_ = atom_ids[residue_ids == residue_id]
+        residue_name = self.rotamer.amino_acids[self.residue_types[residue_id]]
+        all_chi_atoms = self.rotamer.chis_atoms[residue_name]
+        rotated_atom_positions_ = self.rotamer.rotate_side_chain(Chis, target_Chis,
+                                                                 atom_positions_, atom_ids_, all_chi_atoms)
+        rotated_atom_positions = copy.deepcopy(atom_positions)
+        rotated_atom_positions[residue_ids == residue_id] = rotated_atom_positions_
+        return rotated_atom_positions
+
+    def get_positive_data(self, idx):
+        data = {}
+        if self.addID:
+            data["id"] = self.id[idx]
+        data["E"] = self.E[idx]
+        data["N"] = np.min(np.stack([self.N[idx], np.full(len(idx), self.num_neighbors, dtype=np.int32)],
+                                    axis=1), axis=1)
+        data["batch_seg"] = np.repeat(np.arange(len(idx), dtype=np.int32), data["N"])
+        data["Z"] = np.zeros(np.sum(data["N"]), dtype=np.int32)
+        data["R"] = np.zeros([np.sum(data["N"]), 3], dtype=np.float32)
+        data["F"] = np.zeros([np.sum(data["N"]), 3], dtype=np.float32)
+        data["sampled_residue"] = self.sample_residue(idx)
+
+        nend = 0
+        adj_matrices = []
+        adj_matrices_int = []
+        for protein_id, residue_id, num_atom in zip(idx, data["sampled_residue"], data["N"]):
+            topk_indices = self.get_topk_atoms(protein_id, residue_id, num_atom)
+            nstart = nend
+            nend = nstart + num_atom
+            data["F"][nstart:nend] = self.F[topk_indices]
+            data["Z"][nstart:nend] = self.Z[topk_indices]
+            R = self.R[topk_indices]
+            data["R"][nstart:nend] = R
+
+            D_ij = np.linalg.norm(R[:, None, :] - R[None, :, :], axis=-1)
+            # get adjacency matrix for embeddings
+            adj_mat = sp.csr_matrix(D_ij <= self.cutoff)
+            adj_mat -= sp.eye(num_atom, dtype=np.bool)
+            adj_matrices.append(adj_mat)
+
+            if not self.triplets_only:
+                # get adjacency matrix for interaction
+                adj_mat = sp.csr_matrix(D_ij <= self.int_cutoff)
+                adj_mat -= sp.eye(num_atom, dtype=np.bool)
+                adj_matrices_int.append(adj_mat)
+
+        return data, adj_matrices, adj_matrices_int
+
+    def get_negative_data(self, positive_data, idx):
+        all_negative_data = []
+        adj_matrices = []
+        adj_matrices_int = []
+        for negative_id in range(self.num_negative):
+            negative_data = {}
+            if self.addID:
+                negative_data["id"] = positive_data["id"]
+            negative_data["E"] = positive_data["E"]
+            negative_data["N"] = positive_data["N"]
+            negative_data["batch_seg"] = positive_data["batch_seg"] + len(idx) * (negative_id + 1)
+            negative_data["sampled_residue"] = positive_data["sampled_residue"]
+            negative_data["Z"] = np.zeros(np.sum(negative_data["N"]), dtype=np.int32)
+            negative_data["R"] = np.zeros([np.sum(negative_data["N"]), 3], dtype=np.float32)
+            negative_data["F"] = np.zeros([np.sum(negative_data["N"]), 3], dtype=np.float32)
+
+            nend = 0
+            for protein_id, sampled_residue_index, num_atom in zip(idx, negative_data["sampled_residue"], negative_data["N"]):
+                rotated_atom_positions = self.rotate_single_side_chain(protein_id, sampled_residue_index)
+                topk_indices = self.get_topk_atoms(protein_id, sampled_residue_index, num_atom,
+                                                   new_atom_positions=rotated_atom_positions)
+                nstart = nend
+                nend = nstart + num_atom
+                negative_data["F"][nstart:nend] = self.F[topk_indices]
+                negative_data["Z"][nstart:nend] = self.Z[topk_indices]
+                R = rotated_atom_positions[topk_indices - self.N_cumsum[protein_id]]
+                negative_data["R"][nstart:nend] = R
+
+                D_ij = np.linalg.norm(R[:, None, :] - R[None, :, :], axis=-1)
+                # get adjacency matrix for embeddings
+                adj_mat = sp.csr_matrix(D_ij <= self.cutoff)
+                adj_mat -= sp.eye(num_atom, dtype=np.bool)
+                adj_matrices.append(adj_mat)
+
+                if not self.triplets_only:
+                    # get adjacency matrix for interaction
+                    adj_mat = sp.csr_matrix(D_ij <= self.int_cutoff)
+                    adj_mat -= sp.eye(num_atom, dtype=np.bool)
+                    adj_matrices_int.append(adj_mat)
+            all_negative_data.append(negative_data)
+
+        return all_negative_data, adj_matrices, adj_matrices_int
+
+    def __getitem__(self, idx):
+        try: #TODO: remove this
+            if isinstance(idx, (int, np.int64, np.int32)):
+                idx = [idx]
+            if isinstance(idx, tuple):
+                idx = list(idx)
+            if isinstance(idx, slice):
+                idx = np.arange(idx.start, min(idx.stop, len(self)), idx.step)
+
+            # Get the positive conformation
+            all_data = []
+            all_adj_matrices = []
+            all_adj_matrices_int = []
+            positive_data, positive_adj_matrices, positive_adj_matrices_int = self.get_positive_data(idx)
+            all_data.append(positive_data)
+            all_adj_matrices += (positive_adj_matrices)
+            all_adj_matrices_int += (positive_adj_matrices_int)
+
+            # Get the negative conformations
+            negative_data, negative_adj_matrices, negative_adj_matrices_int = self.get_negative_data(positive_data, idx)
+            all_data += negative_data
+            all_adj_matrices += negative_adj_matrices
+            all_adj_matrices_int += negative_adj_matrices_int
+
+            # Pack positive and negative data
+            data = {}
+            for key in positive_data.keys():
+                value = np.concatenate([data_[key] for data_ in all_data], axis=0)
+                data[key] = value
+
+            # Graph construction
+            data = self.append_graph_indices(data, all_adj_matrices, all_adj_matrices_int)
+            data = self.convert_to_tensor(data)
+            return data
+        except:
+            if isinstance(idx, (int, np.int64, np.int32)):
+                idx = [idx]
+            if isinstance(idx, tuple):
+                idx = list(idx)
+            if isinstance(idx, slice):
+                idx = np.arange(idx.start, min(idx.stop, len(self)), idx.step)
+            return self.__getitem__([(x + 1) % self.__len__() for x in idx])
+
+    @classmethod
+    def from_config(cls, config):
+        return cls(config.dataset, cutoff=config.model.cutoff, int_cutoff=config.model.int_cutoff, 
+                     triplets_only=config.model.triplets_only, addID=True, 
+                     num_neighbors=config.num_neighbors, num_negative=config.num_negative, 
+                    rotamer_library_path=config.rotamer_library_path)
+
 
 class PairDataContainer(object):
     """
@@ -799,3 +972,14 @@ class PairDataContainer(object):
 
     def __getitem__(self, idx):
         return [self.container1[idx], self.container2[idx]]
+
+    @classmethod
+    def from_config(cls, config):
+        wt_data_container = DataContainer(
+        config.dataset_wt, cutoff=config.model.cutoff, int_cutoff=config.model.int_cutoff, triplets_only=config.model.triplets_only, 
+        addID=True)
+
+        mt_data_container = DataContainer(
+        config.dataset_mt, cutoff=config.model.cutoff, int_cutoff=config.model.int_cutoff, triplets_only=config.model.triplets_only, 
+        addID=True)
+        return cls(wt_data_container, mt_data_container)
