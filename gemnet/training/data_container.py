@@ -931,7 +931,7 @@ class EBMDataContainer(DataContainer):
     def from_config(cls, config):
         return cls(config.dataset, cutoff=config.model.cutoff, int_cutoff=config.model.int_cutoff, 
                      triplets_only=config.model.triplets_only, addID=True, 
-                     num_neighbors=config.num_neighbors, num_negative=config.num_negative, 
+                     num_neighbors=config.num_neighbors, num_negative=config.trainer.num_negative, 
                     rotamer_library_path=config.rotamer_library_path)
 
 
