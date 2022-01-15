@@ -110,6 +110,7 @@ class GemNet(torch.nn.Module):
         activation: str = "swish",
         scale_file=None,
         name="gemnet",
+        atom_type_start_from=1,
         **kwargs,
         ):
         super().__init__()
@@ -206,7 +207,7 @@ class GemNet(torch.nn.Module):
         ### ------------------------------------------------------------------------------------- ###
 
         # Embedding block
-        self.atom_emb = AtomEmbedding(emb_size_atom)
+        self.atom_emb = AtomEmbedding(emb_size_atom, start_from=atom_type_start_from)
         self.edge_emb = EdgeEmbedding(
             emb_size_atom, num_radial, emb_size_edge, activation=activation
         )

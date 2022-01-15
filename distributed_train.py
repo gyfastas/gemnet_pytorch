@@ -13,11 +13,10 @@ from tqdm import tqdm
 from gemnet.model.gemnet import GemNet
 from gemnet.training import trainers
 from gemnet.training.metrics import Metrics, BestMetrics, spearmanr
-from gemnet.training.data_container import DataContainer, PairDataContainer
+import gemnet.training.data_container as data_containers
 from gemnet.training.data_provider import DataProvider
 from easydict import EasyDict
 import torch
-
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "1"
 os.environ["AUTOGRAPH_VERBOSITY"] = "1"
@@ -35,22 +34,10 @@ def id_generator(size=6, chars=string.ascii_uppercase + string.ascii_lowercase +
     return "".join(random.SystemRandom().choice(chars) for _ in range(size))
 
 def build_dataset(config):
-    ## create dataset
-    logging.info("Load dataset. This example is for a pair-wise container that model interaction between a pair of molecules")
-    wt_data_container = DataContainer(
-        config.dataset_wt, cutoff=config.model.cutoff, int_cutoff=config.model.int_cutoff, triplets_only=config.model.triplets_only, 
-        addID=True)
-
-    mt_data_container = DataContainer(
-        config.dataset_mt, cutoff=config.model.cutoff, int_cutoff=config.model.int_cutoff, triplets_only=config.model.triplets_only, 
-        addID=True,
-    )
-
-    data_container = PairDataContainer(wt_data_container, mt_data_container)
-    return data_container
+    class_name = config["dataset_class"]
+    return getattr(data_containers, class_name).from_config(config)
 
 if __name__ == "__main__":
-    
     args, other_args = parse_args()
 
     logger = logging.getLogger()
@@ -90,7 +77,6 @@ if __name__ == "__main__":
     if not cuda_available:
         logging.warning("CUDA unavailable. Training is run on CPU!")
 
-
     if (config.restart is None) or (config.restart == "None"): 
         directory = config.logdir + "/" + datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + id_generator() + "_" + "_" + os.path.basename(args.config)
     else:
@@ -119,7 +105,6 @@ if __name__ == "__main__":
     logging.info("Initialize model")
     model = GemNet(**config.model)
     data_container = build_dataset(config)
-
 
     logger.info(f"Total dataset length: {len(data_container)}")
 
@@ -181,10 +166,9 @@ if __name__ == "__main__":
 
             # Evaluation
             trainer.eval_on_epoch(data_provider, val_metrics)
-
             trainer.eval_on_epoch(data_provider, test_metrics)
 
-            # Update and save best result <this is very trainer specific actually 
+            # Update and save best result <this is very trainer specific actually
             if metrics_best_val.is_best(val_metrics):
                 last_best =  metrics_best_val.main_metric
                 metrics_best_val.update(epoch, val_metrics)
@@ -216,8 +200,9 @@ if __name__ == "__main__":
             trainer.restore_variable_backups()
 
             # early stopping
-            if epoch - metrics_best_val.step > config.patience * config.evaluation_interval:
-                break
+            if config.early_stop:
+                if epoch - metrics_best_val.step > config.patience * config.evaluation_interval:
+                    break
 
     result = {key + "valid_best": val for key, val in metrics_best_val.items()}
     result_test = {key + "test": val for key, val in metrics_best_test.items()}

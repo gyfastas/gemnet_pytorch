@@ -712,7 +712,7 @@ class EBMDataContainer(DataContainer):
             sampled_residues[k] = sampled_residue_index
         return sampled_residues
 
-    def get_topk_atoms(self, protein_id, residue_id, num_atom, new_atom_positions=None, upper_dist=1e6):
+    def get_topk_atoms(self, protein_id, residue_id, num_atom, new_atom_positions=None):
         """
         Paramters:
             protein_id: (int)
@@ -729,7 +729,7 @@ class EBMDataContainer(DataContainer):
         assert target_residue_CB_position.shape[0] == 1
         all_dist = ((atom_positions - target_residue_CB_position) ** 2).sum(-1)
         is_target_residue = (residue_ids == residue_id)
-        all_dist[is_target_residue] = upper_dist
+        all_dist[is_target_residue] = 0.0
         topk_indices = np.argsort(all_dist)[:num_atom] + start
         return topk_indices
 
@@ -885,7 +885,7 @@ class EBMDataContainer(DataContainer):
         return all_negative_data, adj_matrices, adj_matrices_int
 
     def __getitem__(self, idx):
-        try: #TODO: remove this
+        try:
             if isinstance(idx, (int, np.int64, np.int32)):
                 idx = [idx]
             if isinstance(idx, tuple):
@@ -918,7 +918,7 @@ class EBMDataContainer(DataContainer):
             data = self.append_graph_indices(data, all_adj_matrices, all_adj_matrices_int)
             data = self.convert_to_tensor(data)
             return data
-        except:
+        except Exception as e:
             if isinstance(idx, (int, np.int64, np.int32)):
                 idx = [idx]
             if isinstance(idx, tuple):

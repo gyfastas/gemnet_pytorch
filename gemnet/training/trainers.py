@@ -1,5 +1,6 @@
 import logging
 import torch
+from torch.functional import broadcast_shapes
 from .schedules import LinearWarmupExponentialDecay, ReduceLROnPlateau, MultiWrapper
 from .ema_decay import ExponentialMovingAverage
 from gemnet.utils import dist_utils, training_utils
@@ -46,6 +47,13 @@ class BaseTrainer(object):
         for idx, batch in enumerate(islice(data_loader, iter_per_epoch)):
             inputs, targets = batch
             self.forwrad_and_backward(model, metrics, inputs, targets)
+            if idx % 20 == 0 and self.rank==0:
+                result = metrics.result(append_tag=False)
+                metrics_strings = [
+                f"{key}: {result[key]:.4f}"
+                for key in metrics.keys]
+                metrics_strings = " ;".join(metrics_strings)  
+                logging.info("iter {} | train metrics: {}".format(idx, metrics_strings))
 
     def dict2device(self, data, device=None):
         if device is None:
@@ -656,7 +664,6 @@ class DDGTrainer(Trainer):
         metric_dict["nsamples"] = pred.shape[0]
         return metric_dict
 
-
 class EBMTrainer(Trainer):
     """
     Trainer for energy-based model.
@@ -693,12 +700,9 @@ class EBMTrainer(Trainer):
         return ["loss", "energy_mae", "force_mae", "force_rmse", "log_likelihood"]
 
     def get_log_likelihood(self, all_energy, eps=1e-6):
-        all_energy = all_energy.view(-1).view(self.num_negative + 1, -1)  # (N_neg + 1, B)
-        unnormalized_likelihood = torch.exp(-all_energy)
-        positive_likelihood = unnormalized_likelihood[0, :]
-        sum_likelihood = unnormalized_likelihood.sum(0)
-        log_likelihood = torch.log(positive_likelihood / (sum_likelihood + eps)).mean()
-        return log_likelihood
+        all_energy = all_energy.view(-1).view(self.num_negative + 1, -1).permute(1, 0)  # (B, N_neg + 1)
+        labels = torch.zeros(all_energy.shape[0], dtype=torch.long, device=all_energy.device)
+        return -nn.functional.cross_entropy(all_energy, labels)
 
     def forwrad_and_backward(self, model, metrics, inputs, targets):
         inputs, targets = self.dict2device(inputs), self.dict2device(targets)
@@ -737,3 +741,7 @@ class EBMTrainer(Trainer):
             )
 
         return loss
+
+    def eval_on_epoch(self, data_provider, metrics, split="val"):
+        # pretrained trainer without evaluation
+        return metrics

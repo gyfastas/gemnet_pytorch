@@ -14,10 +14,10 @@ class AtomEmbedding(torch.nn.Module):
             Atom embeddings size
     """
 
-    def __init__(self, emb_size, name=None):
+    def __init__(self, emb_size, name=None, start_from=1):
         super().__init__()
         self.emb_size = emb_size
-
+        self.start_from = start_from
         # Atom embeddings: We go up to Pu (94). Use 93 dimensions because of 0-based indexing
         self.embeddings = torch.nn.Embedding(93, emb_size)
         # init by uniform distribution
@@ -30,7 +30,7 @@ class AtomEmbedding(torch.nn.Module):
             h: Tensor, shape=(nAtoms, emb_size)
                 Atom embeddings.
         """
-        h = self.embeddings(Z - 1)  # -1 because Z.min()=1 (==Hydrogen)
+        h = self.embeddings(Z - self.start_from)  # -1 because Z.min()=1 (==Hydrogen)
         return h
 
 
