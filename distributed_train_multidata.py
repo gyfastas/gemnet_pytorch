@@ -13,6 +13,7 @@ import time
 from datetime import datetime
 from tqdm import tqdm
 import copy
+from pathlib import Path
 
 from gemnet.model.gemnet import GemNet
 from gemnet.training import trainers
@@ -145,8 +146,20 @@ if __name__ == "__main__":
         step_init = 0
 
     for epoch in tqdm(range(config.num_epochs)):
-        # prepare data
-        for data_path in config.dataset:
+        # prepare data, support re
+        all_data_path = list()
+        for path_str in config.dataset:
+            dir_name = os.path.dirname(path_str)
+            file_name = os.path.basename(path_str)
+            dir_path_obj = Path(dir_name)
+            matched_files = list(dir_path_obj.rglob(file_name))
+            matched_files = [str(x) for x in matched_files if os.path.exists(str(x))]
+            all_data_path.extend(matched_files)
+        all_data_path = list(set(all_data_path))
+
+        for data_path in all_data_path:
+            ## process re
+
             new_config = copy.deepcopy(config)
             new_config["dataset"] = data_path
 
@@ -171,12 +184,12 @@ if __name__ == "__main__":
         trainer.save_variable_backups()
         trainer.load_averaged_variables()
 
-
         train_metrics_res = train_metrics.result(append_tag=False)
         metrics_strings = [f"{key}: train={train_metrics_res[key]:.6f}" for key in train_metrics.keys]
-        logging.info(
-            f"epoch ({epoch}): " + "; ".join(metrics_strings)
-        )
+        if trainer.rank==0:
+            logging.info(
+                f"epoch ({epoch}): " + "; ".join(metrics_strings)
+            )
 
         # decay learning rate on plateau
         trainer.decay_maybe(train_metrics.loss)
