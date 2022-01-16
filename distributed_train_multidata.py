@@ -155,7 +155,7 @@ if __name__ == "__main__":
             matched_files = list(dir_path_obj.rglob(file_name))
             matched_files = [str(x) for x in matched_files if os.path.exists(str(x))]
             all_data_path.extend(matched_files)
-        all_data_path = list(set(all_data_path))
+        all_data_path = sorted(list(set(all_data_path)))
 
         for data_path in all_data_path:
             ## process re
