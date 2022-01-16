@@ -118,8 +118,8 @@ if __name__ == "__main__":
     if "pretrained" in config.keys():
         if os.path.exists(config.pretrained):
             logging.info(f"load pretrained model from {config.pretrained}")
-            model_checkpoint = torch.load(config.pretrained, map_location="cpu")
-            msg = model.load_state_dict(config.pretrained, strict=False)
+            model_checkpoint = torch.load(config.pretrained, map_location="cpu")['model']
+            msg = model.load_state_dict(model_checkpoint, strict=False)
             logging.info(f"load message: {msg}")
     # Initialize trainer
     trainer_class = config.trainer.pop("class")

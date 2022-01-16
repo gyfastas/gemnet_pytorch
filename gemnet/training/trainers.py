@@ -293,10 +293,6 @@ class Trainer(BaseTrainer):
                     if "out_forces" in name:
                         self.params_except_last += [param]
 
-        self.exp_decay = ExponentialMovingAverage(
-            [p for p in self.model.parameters() if p.requires_grad], self.ema_decay
-        )
-
         if self.finetune_mode in ["tune_energy_map", "tune_output_block"]:
             all_params = self.model.parameters()
             tuning_params = self.model.energy_map_blocks.parameters() if self.finetune_mode == "tune_energy_map" \
@@ -308,6 +304,10 @@ class Trainer(BaseTrainer):
                 self.model.energy_map_blocks.apply(self._init_weights)
             else:
                 self.model.out_blocks.apply(self._init_weights)
+
+        self.exp_decay = ExponentialMovingAverage(
+            [p for p in self.model.parameters() if p.requires_grad], self.ema_decay
+        )
 
     def _init_weights(self, module, initializer_range=0.02):
         """
