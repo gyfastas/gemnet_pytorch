@@ -99,6 +99,22 @@ class Trainer(BaseTrainer):
             If True perform Mean Variance Estimation.
         agc: bool
             If True use adaptive gradient clipping else clip by global norm.
+        finetune_mode: str
+            The mode to finetune a pre-trained GemNet EBM (None, `tune_energy_map`, `tune_output_block`, `tune_all`).
+        lr_ratio: float
+            The learning ratio of interaction blocks against output blocks.
+
+    Fine-tuning strategies:
+    1. Fix the whole GemNet (interaction blocks and output blocks), only tune a linear mapping of energy.
+        Implementation: load the pre-trained model, set `finetune_mode` to `tune_energy_map`,
+                        fix the parameters of all other blocks.
+    2. Train new output blocks upon the representations extracted by GemNet, fix the parameters of interaction blocks.
+        Implementation: load the pre-trained model, set `finetune_mode` to `tune_output_block`,
+                        randomly initialize the parameters of output blocks, fix the parameters of other modules.
+    3. Fine-tune the whole GemNet model.
+        Implementation: load the pre-trained model, set `finetune_mode` to `tune_all`,
+                        randomly initialize the parameters of output blocks,
+                        set `lr_ratio` to a value less 1 (e.g. 0.1 by default) to fine-tune the encoder.
     """
 
     def __init__(
@@ -119,6 +135,8 @@ class Trainer(BaseTrainer):
         loss: str = "mae",  # else use rmse
         mve: bool = False,
         agc=False,
+        finetune_mode=None,
+        lr_ratio=0.1,
     ):
         assert 0 <= rho_force <= 1
         self.model = model
@@ -128,6 +146,8 @@ class Trainer(BaseTrainer):
         self.mve = mve
         self.loss = loss
         self.agc = agc
+        self.finetune_mode = finetune_mode
+        self.lr_ratio = lr_ratio
         self.init_distributed()
 
         self.reset_optimizer(
@@ -178,6 +198,23 @@ class Trainer(BaseTrainer):
                         continue
                     adamW_params += [param]
 
+            if self.finetune_mode == "tune_all":
+                all_params = self.model.parameters()
+                output_params = self.model.out_blocks.parameters()
+                encoder_params = list(set(all_params) - set(output_params))
+                adamW_params_new = []
+                adamW_params_new.append({"params": list(set(adamW_params).intersection(set(encoder_params))),
+                                         "lr": self.lr_ratio * learning_rate})
+                adamW_params_new.append({"params": list(set(adamW_params).intersection(set(output_params))),
+                                         "lr": learning_rate})
+                adamW_params = adamW_params_new
+                rest_params_new = []
+                rest_params_new.append({"params": list(set(rest_params).intersection(set(encoder_params))),
+                                        "lr": self.lr_ratio * learning_rate})
+                rest_params_new.append({"params": list(set(rest_params).intersection(set(output_params))),
+                                        "lr": learning_rate})
+                rest_params = rest_params_new
+
             # AdamW optimizer
             AdamW = torch.optim.AdamW(
                 adamW_params,
@@ -209,11 +246,20 @@ class Trainer(BaseTrainer):
             )
             self.optimizers = MultiWrapper(AdamW, Adam)
 
-
         else:
+            if self.finetune_mode == "tune_all":
+                train_parameters = []
+                all_params = self.model.parameters()
+                output_params = self.model.out_blocks.parameters()
+                encoder_params = list(set(all_params) - set(output_params))
+                train_parameters.append({"params": encoder_params, "lr": self.lr_ratio * learning_rate})
+                train_parameters.append({"params": output_params, "lr": learning_rate})
+            else:
+                train_parameters = self.model.parameters()
+
             # Adam: Optimzer for all parameters
             Adam = torch.optim.Adam(
-                self.model.parameters(),
+                train_parameters,
                 lr=learning_rate,
                 betas=(0.9, 0.999),
                 eps=1e-07,
@@ -250,6 +296,27 @@ class Trainer(BaseTrainer):
         self.exp_decay = ExponentialMovingAverage(
             [p for p in self.model.parameters() if p.requires_grad], self.ema_decay
         )
+
+        if self.finetune_mode in ["tune_energy_map", "tune_output_block"]:
+            all_params = self.model.parameters()
+            tuning_params = self.model.energy_map_blocks.parameters() if self.finetune_mode == "tune_energy_map" \
+                else self.model.out_blocks.parameters()
+            fix_params = list(set(all_params) - set(tuning_params))
+            for p in fix_params:
+                p.requires_grad = False
+            if self.finetune_mode == "tune_energy_map":
+                self.model.energy_map_blocks.apply(self._init_weights)
+            else:
+                self.model.out_blocks.apply(self._init_weights)
+
+    def _init_weights(self, module, initializer_range=0.02):
+        """
+        Initialize the weights of each module.
+        """
+        if isinstance(module, (nn.Linear, nn.Embedding)):
+            module.weight.data.normal_(mean=0.0, std=initializer_range)
+        if isinstance(module, nn.Linear) and module.bias is not None:
+            module.bias.data.zero_()
 
     def save_variable_backups(self):
         self.exp_decay.store()

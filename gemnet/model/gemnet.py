@@ -78,6 +78,18 @@ class GemNet(torch.nn.Module):
             Name of the activation function.
         scale_file: str
             Path to the json file containing the scaling factors.
+
+    Fine-tuning strategies:
+    1. Fix the whole GemNet (interaction blocks and output blocks), only tune a linear mapping of energy.
+        Implementation: load the pre-trained model, set `energy_linear_map` to True,
+                        fix the parameters of all other blocks.
+    2. Train new output blocks upon the representations extracted by GemNet, fix the parameters of interaction blocks.
+        Implementation: load the pre-trained model, set `energy_linear_map` to False,
+                        randomly initialize the parameters of output blocks, fix the parameters of other modules.
+    3. Fine-tune the whole GemNet model.
+        Implementation: load the pre-trained model, set `energy_linear_map` to False,
+                        randomly initialize the parameters of output blocks,
+                        set the learning rate of former blocks as a ratio (e.g., 0.1) of that of output blocks.
     """
 
     def __init__(
@@ -111,6 +123,7 @@ class GemNet(torch.nn.Module):
         scale_file=None,
         name="gemnet",
         atom_type_start_from=1,
+        energy_linear_map=False,
         **kwargs,
         ):
         super().__init__()
@@ -118,6 +131,7 @@ class GemNet(torch.nn.Module):
         self.num_targets = num_targets
         self.num_blocks = num_blocks
         self.extensive = extensive
+        self.energy_linear_map = energy_linear_map
 
         self.forces_coupled = forces_coupled
 
@@ -214,6 +228,7 @@ class GemNet(torch.nn.Module):
 
         out_blocks = []
         int_blocks = []
+        energy_map_blocks = []
 
         # Interaction Blocks
         interaction_block = (
@@ -256,9 +271,11 @@ class GemNet(torch.nn.Module):
                     name=f"OutBlock_{i}",
                 )
             )
+            energy_map_blocks.append(torch.nn.Linear(1, 1, bias=True))
 
         self.out_blocks = torch.nn.ModuleList(out_blocks)
         self.int_blocks = torch.nn.ModuleList(int_blocks)
+        self.energy_map_blocks = torch.nn.ModuleList(energy_map_blocks)
 
     @staticmethod
     def calculate_interatomic_vectors(R, id_s, id_t):
@@ -546,7 +563,9 @@ class GemNet(torch.nn.Module):
         rbf_h = self.mlp_rbf_h(rbf)
         rbf_out = self.mlp_rbf_out(rbf)
 
-        E_a, F_ca = self.out_blocks[0](h, m, rbf_out, id_a)  
+        E_a, F_ca = self.out_blocks[0](h, m, rbf_out, id_a)
+        if self.energy_linear_map:
+            E_a = self.energy_map_blocks[0](E_a)
         # (nAtoms, num_targets), (nEdges, num_targets)
 
         for i in range(self.num_blocks):
@@ -573,6 +592,8 @@ class GemNet(torch.nn.Module):
             )  # (nAtoms, emb_size_atom), (nEdges, emb_size_edge)
 
             E, F = self.out_blocks[i + 1](h, m, rbf_out, id_a)
+            if self.energy_linear_map:
+                E = self.energy_map_blocks[i + 1](E)
             # (nAtoms, num_targets), (nEdges, num_targets)
             F_ca += F
             E_a += E
