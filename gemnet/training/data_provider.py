@@ -23,9 +23,10 @@ class CustomDataLoader(DataLoader):
         batch_sampler = BatchSampler(
             idx_sampler, batch_size=batch_size, drop_last=False
         )
+        dataset = data_container if shuffle else Subset(data_container, indices)
 
         super().__init__(
-            data_container,
+            dataset,
             sampler=batch_sampler,
             collate_fn=data_container.collate_fn,
             pin_memory=True,  # load on CPU push to GPU

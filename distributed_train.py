@@ -185,9 +185,10 @@ if __name__ == "__main__":
                 f"{key}: train={train_metrics_res[key]:.6f}, val={val_metrics_res[key]:.6f}, test={test_metrics_res[key]:.6f}"
                 for key in val_metrics.keys
             ]
-            logging.info(
-                f"epoch ({epoch}): " + "; ".join(metrics_strings)
-            )
+            if trainer.rank==0:
+                logging.info(
+                    f"epoch ({epoch}): " + "; ".join(metrics_strings)
+                )
 
             # decay learning rate on plateau
             trainer.decay_maybe(val_metrics.loss)
