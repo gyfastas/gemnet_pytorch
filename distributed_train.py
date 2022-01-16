@@ -114,6 +114,13 @@ if __name__ == "__main__":
 
     logging.info("Prepare training")
 
+    ## load from pretrained
+    if "pretrained" in config.keys():
+        if os.path.exists(config.pretrained):
+            logging.info(f"load pretrained model from {config.pretrained}")
+            model_checkpoint = torch.load(config.pretrained, map_location="cpu")
+            msg = model.load_state_dict(config.pretrained, strict=False)
+            logging.info(f"load message: {msg}")
     # Initialize trainer
     trainer_class = config.trainer.pop("class")
     trainer = getattr(trainers, trainer_class)(model=model, **config.trainer)
@@ -149,6 +156,9 @@ if __name__ == "__main__":
         logging.info("Freshly initialize model")
         metrics_best_val.inititalize()
         step_init = 0
+
+
+            
 
     for epoch in tqdm(range(config.num_epochs)):
         # Perform training step
