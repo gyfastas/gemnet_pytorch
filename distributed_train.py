@@ -129,7 +129,9 @@ if __name__ == "__main__":
                             metric_mode=config.metric_mode)
     metrics_best_test = BestMetrics(best_dir, test_metrics, main_metric=config.main_metric,
                             metric_mode=config.metric_mode)
-
+    
+    metrics_best_val.state["spearman_val"] = 0.0
+    metrics_best_test.state["spearman_test"] = 0.0
     # Set up checkpointing
     # Restore latest checkpoint
     if os.path.exists(log_path_model):
