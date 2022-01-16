@@ -136,10 +136,10 @@ if __name__ == "__main__":
     # Restore latest checkpoint
     if os.path.exists(log_path_model):
         logging.info("Restoring model and trainer")
-        model_checkpoint = torch.load(log_path_model)
+        model_checkpoint = torch.load(log_path_model, map_location=trainer.device)
         model.load_state_dict(model_checkpoint["model"])
 
-        train_checkpoint = torch.load(log_path_training)
+        train_checkpoint = torch.load(log_path_training, map_location=trainer.device)
         trainer.load_state_dict(train_checkpoint["trainer"])
         # restore the best saved results
         metrics_best_val.restore()
