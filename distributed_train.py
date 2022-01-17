@@ -181,14 +181,14 @@ if __name__ == "__main__":
             trainer.eval_on_epoch(data_provider, test_metrics)
 
             # Update and save best result <this is very trainer specific actually
-            if metrics_best_val.is_best(val_metrics):
-                last_best =  metrics_best_val.main_metric
-                metrics_best_val.update(epoch, val_metrics)
-                metrics_best_test.update(epoch, test_metrics)
-                logging.info(f"best {metrics_best_val.main_metric_name} on valid update: {last_best} => {metrics_best_val.main_metric}")
-                logging.info(f"current spearman rho on test: {metrics_best_test.main_metric}")
-
-                torch.save(model.state_dict(), best_path_model)
+            if trainer.rank==0:
+                if metrics_best_val.is_best(val_metrics):
+                    last_best =  metrics_best_val.main_metric
+                    metrics_best_val.update(epoch, val_metrics)
+                    metrics_best_test.update(epoch, test_metrics)
+                    logging.info(f"best {metrics_best_val.main_metric_name} on valid update: {last_best} => {metrics_best_val.main_metric}")
+                    logging.info(f"current spearman rho on test: {metrics_best_test.main_metric}")
+                    torch.save(model.state_dict(), best_path_model)
 
             train_metrics_res = train_metrics.result(append_tag=False)
             val_metrics_res = val_metrics.result(append_tag=False)
