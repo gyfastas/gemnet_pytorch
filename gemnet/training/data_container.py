@@ -280,6 +280,15 @@ class DataContainer:
         idx_data = {k:v for k,v in idx_data.items() if v is not None}
         data.update(idx_data)
         return data
+    
+    def formalize_idx(self, idx):
+        if isinstance(idx, (int, np.int64, np.int32)):
+            idx = [idx]
+        if isinstance(idx, tuple):
+            idx = list(idx)
+        if isinstance(idx, slice):
+            idx = np.arange(idx.start, min(idx.stop, len(self)), idx.step)
+        return idx
 
     def __getitem__(self, idx):
         """
@@ -352,12 +361,7 @@ class DataContainer:
                 - Kidx4: np.ndarray, shape (nTriplets,)
                     Indices to reshape the neighbor indices d->b into a dense matrix.
         """
-        if isinstance(idx, (int, np.int64, np.int32)):
-            idx = [idx]
-        if isinstance(idx, tuple):
-            idx = list(idx)
-        if isinstance(idx, slice):
-            idx = np.arange(idx.start, min(idx.stop, len(self)), idx.step)
+        idx = self.formalize_idx(idx)
 
         data = {}
         if self.addID:
@@ -572,42 +576,139 @@ class DataContainer:
                 inputs[key] = batch[key]
         return inputs, targets
 
-class PairDataContainer(object):
+class MutationPositionDataContainer(DataContainer):
     """
-    This class is a wrapper class of Data Container
+    A data container that returns the atoms around the mutation point
+
+    "mutation_position" must be a key in the data dict with shape [N_molecules, ]
+    indicating the mutation position to be selected.
+
     """
-    def __init__(self, container1, container2):
-        self.container1 = container1
-        self.container2 = container2
-        assert len(container1) == len(container2)
+    def __init__(self, path, cutoff, int_cutoff, triplets_only=False, transforms=None, addID=False, num_neighbors=64, 
+        pre_compute_topk=False):
+        self.index_keys = [
+            "batch_seg", "id_undir", "id_swap", "id_c", "id_a", "id3_expand_ba",
+            "id3_reduce_ca", "Kidx3", "sampled_residue", "residue_ids", "residue_types","atom_ids", "mutation_position"]
+        if not triplets_only:
+            self.index_keys += [
+                "id4_int_b", "id4_int_a", "id4_reduce_ca", "id4_expand_db", "id4_reduce_cab",
+                "id4_expand_abd", "Kidx4", "id4_reduce_intm_ca", "id4_expand_intm_db", "id4_reduce_intm_ab",
+                "id4_expand_intm_ab"]
+        self.triplets_only = triplets_only
+        self.cutoff = cutoff
+        self.int_cutoff = int_cutoff
+        self.addID = addID
+        self.num_neighbors = num_neighbors
+        self.pre_compute_topk = pre_compute_topk
+        self.keys = ["N", "Z", "R", "F", "E", "residue_ids", "residue_types", "atom_ids", "mutation_position"]
+        if addID:
+            self.keys += ["id"]
 
-    def collate_fn(self, batch):
-        batch = batch[0]  # already batched
-        inputs = list()
-        targets = list()
-        for element in batch:
-            input = dict()
-            target = dict()
-            for key in element:
-                if key in self.targets:
-                    target[key] = element[key]
-                else:
-                    input[key] = element[key]
-            inputs.append(input)
-            targets.append(target)
-        return inputs, targets
+        self._load_npz(path, self.keys)  # set keys as attributes
 
-    def __len__(self):
-        return len(self.container1)
+        if transforms is None:
+            self.transforms = []
+        else:
+            assert isinstance(transforms, (list, tuple))
+            self.transforms = transforms
 
-    def __getattr__(self, name):   
-        try:
-            return super().__getattr__(name)
-        except AttributeError:
-            return getattr(self.container1, name)
+        # modify dataset
+        for transform in self.transforms:
+            transform(self)
+
+        assert self.R is not None
+        assert self.N is not None
+        assert self.Z is not None
+        assert self.E is not None
+        assert self.F is not None
+        assert self.residue_ids is not None  # (N_atoms,)
+        assert self.residue_types is not None  # (N_residues,)
+        assert self.atom_ids is not None   # (N_atoms,)
+        assert self.mutation_position is not None # (N_molecules, )
+
+        assert len(self.E) > 0
+        assert len(self.F) > 0
+        self.process_attributes()
+        if self.pre_compute_topk:
+            self.topk_indices = list()
+            protein_ids = list(range(self.__len__()))
+            for protein_id, residue_id in zip(protein_ids, self.mutation_position):
+                num_atom = self.num_neighbors
+                topk_index = self.get_topk_atoms(protein_id, residue_id, num_atom)
+                self.topk_indices.append(topk_index)
+
+
+    def get_topk_atoms(self, protein_id, residue_id, num_atom):
+        """
+        Paramters:
+            protein_id: (int) the index of the protein
+            residue_id: (int) the index of the sampled residue in the data array (not the type of the residue)
+            num_atom: (int) selected num atom 
+        """
+        start = self.N_cumsum[protein_id]
+        end = self.N_cumsum[protein_id + 1]
+        atom_positions = self.R[start:end]
+        residue_ids = self.residue_ids[start:end]
+        atom_ids = self.atom_ids[start:end]
+        target_residue_CB = (residue_ids == residue_id) & (atom_ids == 4)
+        target_residue_CB_position = atom_positions[target_residue_CB]
+        assert target_residue_CB_position.shape[0] == 1
+        all_dist = ((atom_positions - target_residue_CB_position) ** 2).sum(-1)
+        is_target_residue = (residue_ids == residue_id)
+        all_dist[is_target_residue] = 0.0
+        topk_indices = np.argsort(all_dist)[:num_atom] + start # to variadic
+        return topk_indices
 
     def __getitem__(self, idx):
-        return [self.container1[idx], self.container2[idx]]
+        """
+        sample topk atoms from the target residue
+        """
+        idx = self.formalize_idx(idx)
+
+        data = {}
+        if self.addID:
+            data["id"] = self.id[idx]
+
+        data["E"] = self.E[idx]
+        data["mutation_position"] = self.mutation_position[idx]
+        data["N"] = np.min(np.stack([self.N[idx], np.full(len(idx), self.num_neighbors, dtype=np.int32)],
+                                    axis=1), axis=1)
+        data["batch_seg"] = np.repeat(np.arange(len(idx), dtype=np.int32), data["N"])
+        data["Z"] = np.zeros(np.sum(data["N"]), dtype=np.int32)
+        data["R"] = np.zeros([np.sum(data["N"]), 3], dtype=np.float32)
+        data["F"] = np.zeros([np.sum(data["N"]), 3], dtype=np.float32)
+
+        nend = 0
+        adj_matrices = []
+        adj_matrices_int = []
+
+        for protein_id, residue_id, num_atom in zip(idx, data["mutation_position"], data["N"]):
+            ## Note: we assume that the mutation_posistion has been packed to variadic.
+            if self.pre_compute_topk:
+                topk_indices = self.topk_indices[protein_id] 
+            else:
+                topk_indices = self.get_topk_atoms(protein_id, residue_id, num_atom)
+            nstart = nend
+            nend = nstart + num_atom
+            data["F"][nstart:nend] = self.F[topk_indices]
+            data["Z"][nstart:nend] = self.Z[topk_indices]
+            R = self.R[topk_indices]
+            data["R"][nstart:nend] = R
+
+            D_ij = np.linalg.norm(R[:, None, :] - R[None, :, :], axis=-1)
+            # get adjacency matrix for embeddings
+            adj_mat = sp.csr_matrix(D_ij <= self.cutoff)
+            adj_mat -= sp.eye(num_atom, dtype=np.bool)
+            adj_matrices.append(adj_mat)
+
+            if not self.triplets_only:
+                # get adjacency matrix for interaction
+                adj_mat = sp.csr_matrix(D_ij <= self.int_cutoff)
+                adj_mat -= sp.eye(num_atom, dtype=np.bool)
+                adj_matrices_int.append(adj_mat)
+
+        data = self.append_graph_indices(data, adj_matrices, adj_matrices_int)
+        return self.convert_to_tensor(data)
 
 
 class EBMDataContainer(DataContainer):
@@ -886,12 +987,7 @@ class EBMDataContainer(DataContainer):
 
     def __getitem__(self, idx):
         try:
-            if isinstance(idx, (int, np.int64, np.int32)):
-                idx = [idx]
-            if isinstance(idx, tuple):
-                idx = list(idx)
-            if isinstance(idx, slice):
-                idx = np.arange(idx.start, min(idx.stop, len(self)), idx.step)
+            idx = self.formalize_idx(idx)
 
             # Get the positive conformation
             all_data = []
@@ -919,12 +1015,7 @@ class EBMDataContainer(DataContainer):
             data = self.convert_to_tensor(data)
             return data
         except Exception as e:
-            if isinstance(idx, (int, np.int64, np.int32)):
-                idx = [idx]
-            if isinstance(idx, tuple):
-                idx = list(idx)
-            if isinstance(idx, slice):
-                idx = np.arange(idx.start, min(idx.stop, len(self)), idx.step)
+            idx = self.formalize_idx(idx)
             return self.__getitem__([(x + 1) % self.__len__() for x in idx])
 
     @classmethod
@@ -933,7 +1024,6 @@ class EBMDataContainer(DataContainer):
                      triplets_only=config.model.triplets_only, addID=True, 
                      num_neighbors=config.num_neighbors, num_negative=config.trainer.num_negative, 
                     rotamer_library_path=config.rotamer_library_path)
-
 
 class PairDataContainer(object):
     """
@@ -975,11 +1065,14 @@ class PairDataContainer(object):
 
     @classmethod
     def from_config(cls, config):
-        wt_data_container = DataContainer(
+        container_class = config.get("container_class", "DataContainer")
+        container_class = globals()[container_class]
+
+        wt_data_container = container_class(
         config.dataset_wt, cutoff=config.model.cutoff, int_cutoff=config.model.int_cutoff, triplets_only=config.model.triplets_only, 
         addID=True)
 
-        mt_data_container = DataContainer(
+        mt_data_container = container_class(
         config.dataset_mt, cutoff=config.model.cutoff, int_cutoff=config.model.int_cutoff, triplets_only=config.model.triplets_only, 
         addID=True)
         return cls(wt_data_container, mt_data_container)
