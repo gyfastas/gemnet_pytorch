@@ -738,7 +738,8 @@ class EBMDataContainer(DataContainer):
             "Kidx3",
             "sampled_residue",
             "residue_ids", 
-            "residue_types", 
+            "residue_types",
+            "is_interface",
             "atom_ids"
         ]
         if not triplets_only:
@@ -762,7 +763,7 @@ class EBMDataContainer(DataContainer):
         self.num_neighbors = num_neighbors
         self.num_negative = num_negative
         self.rotamer = RotamerBase(library_path=rotamer_library_path)
-        self.keys = ["N", "Z", "R", "F", "E", "residue_ids", "residue_types", "atom_ids"]
+        self.keys = ["N", "Z", "R", "F", "E", "residue_ids", "residue_types", "is_interface", "atom_ids"]
         if addID:
             self.keys += ["id"]
 
@@ -785,6 +786,7 @@ class EBMDataContainer(DataContainer):
         assert self.F is not None
         assert self.residue_ids is not None  # (N_atoms,)
         assert self.residue_types is not None  # (N_residues,)
+        assert self.is_interface is not None  # (N_residues,)
         assert self.atom_ids is not None   # (N_atoms,)
 
         assert len(self.E) > 0
@@ -806,8 +808,10 @@ class EBMDataContainer(DataContainer):
             residue_index_range = np.arange(residue_start, residue_end) # [N_residue-2, ]
             residue_types = self.residue_types[residue_start:residue_end] # [N_residue-2, ]
             in_library = residue_types < len(self.rotamer.amino_acids)
-            assert in_library.sum() > 0 # if none of the residues are in lib, then raise error
-            residue_index_range = residue_index_range[in_library]
+            is_interface = self.is_interface[residue_start:residue_end] # [N_residue-2, ]
+            is_desired = in_library & is_interface
+            assert is_desired.sum() > 0 # if none of the residues are in lib and on interface, then raise error
+            residue_index_range = residue_index_range[is_desired]
             sampled_residue_index = np.random.choice(residue_index_range, 1)[0]
             # return the index of the residue rather than the type of the residue
             sampled_residues[k] = sampled_residue_index
