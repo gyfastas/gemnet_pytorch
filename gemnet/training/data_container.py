@@ -588,7 +588,8 @@ class MutationPositionDataContainer(DataContainer):
         pre_compute_topk=False):
         self.index_keys = [
             "batch_seg", "id_undir", "id_swap", "id_c", "id_a", "id3_expand_ba",
-            "id3_reduce_ca", "Kidx3", "sampled_residue", "residue_ids", "residue_types","atom_ids", "mutation_position"]
+            "id3_reduce_ca", "Kidx3", "sampled_residue", "residue_ids", "residue_types","atom_ids", "mutation_position", 
+            "chain_ids", "relative_chain_ids", "num_residue"]
         if not triplets_only:
             self.index_keys += [
                 "id4_int_b", "id4_int_a", "id4_reduce_ca", "id4_expand_db", "id4_reduce_cab",
@@ -600,7 +601,8 @@ class MutationPositionDataContainer(DataContainer):
         self.addID = addID
         self.num_neighbors = num_neighbors
         self.pre_compute_topk = pre_compute_topk
-        self.keys = ["N", "Z", "R", "F", "E", "residue_ids", "residue_types", "atom_ids", "mutation_position"]
+        self.keys = ["N", "Z", "R", "F", "E", "residue_ids", "residue_types", "atom_ids", "mutation_position", 
+                    "chain_ids", "relative_chain_ids", "num_residue"]
         if addID:
             self.keys += ["id"]
 
@@ -637,7 +639,6 @@ class MutationPositionDataContainer(DataContainer):
                 topk_index = self.get_topk_atoms(protein_id, residue_id, num_atom)
                 self.topk_indices.append(topk_index)
 
-
     def get_topk_atoms(self, protein_id, residue_id, num_atom):
         """
         Paramters:
@@ -650,7 +651,7 @@ class MutationPositionDataContainer(DataContainer):
         atom_positions = self.R[start:end]
         residue_ids = self.residue_ids[start:end]
         atom_ids = self.atom_ids[start:end]
-        target_residue_CB = (residue_ids == residue_id) & (atom_ids == 4)
+        target_residue_CB = (residue_ids == residue_id) & (atom_ids == 0)
         target_residue_CB_position = atom_positions[target_residue_CB]
         assert target_residue_CB_position.shape[0] == 1
         all_dist = ((atom_positions - target_residue_CB_position) ** 2).sum(-1)
@@ -740,7 +741,9 @@ class EBMDataContainer(DataContainer):
             "residue_ids", 
             "residue_types",
             "is_interface",
-            "atom_ids"
+            "atom_ids", 
+            "chian_ids", 
+            "num_residue"
         ]
         if not triplets_only:
             self.index_keys += [
@@ -763,7 +766,7 @@ class EBMDataContainer(DataContainer):
         self.num_neighbors = num_neighbors
         self.num_negative = num_negative
         self.rotamer = RotamerBase(library_path=rotamer_library_path)
-        self.keys = ["N", "Z", "R", "F", "E", "residue_ids", "residue_types", "is_interface", "atom_ids"]
+        self.keys = ["N", "Z", "R", "F", "E", "residue_ids", "residue_types", "is_interface", "atom_ids", "chain_ids", "num_residue"]
         if addID:
             self.keys += ["id"]
 
