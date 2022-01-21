@@ -782,7 +782,9 @@ class EBMTrainer(Trainer):
         force_mae = self.get_mae(targets["F"], mean_forces)
         log_likelihood = self.get_log_likelihood(mean_energy)
         loss = -log_likelihood + 0.0 * energy_mae + 0.0 * force_mae
-
+        if torch.isnan(loss):
+            logging.info("warning! the loss is nan, skip this iter.")
+            return 0.0
         self.optimizers.zero_grad()
         loss.backward()
         self.model.scale_shared_grads()
