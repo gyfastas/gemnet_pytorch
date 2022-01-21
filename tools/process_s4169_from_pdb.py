@@ -91,10 +91,6 @@ class MutationChangeStructure(Dataset):
     chain_dict = {chr(65 + i): i for i in range(26)}
 
     def __init__(self, path):
-        """
-        atom_id: we have
-        chain_id:
-        """
         self.path = path
         ## data place holder
         self.wild_type_data = defaultdict(list)
@@ -185,7 +181,11 @@ class MutationChangeStructure(Dataset):
             except:
                 residue_types_wt = wild_type_data['residue_types_origin']
                 residue_types_mt = mutant_data['residue_types_origin']
-                correct_position = np.where(np.array(residue_types_wt) != np.array(residue_types_mt))[0][0]
+                correct_positions = np.where(np.array(residue_types_wt) != np.array(residue_types_mt))[0]
+                if len(correct_positions) > 1:
+                    print("multiple mutation founded in this data: {}".format(data_info))
+                correct_position = correct_positions[0]
+                
 
                 print(f"row {idx} with wrong mutation position of {int(mutation_info[2:-1]) - 1}, the correct one is {correct_position}")
                 wild_type_data['mutation_position'] = correct_position
@@ -259,7 +259,7 @@ class MutationChangeStructure(Dataset):
         chain_ids = list()
         chain_names = list()
         atom_index_in_residue = 0
-        for atom in atoms:
+        for a_idx, atom in enumerate(atoms):
             ## only get atom information for residues that are recognizable
             residue = atom.GetPDBResidueInfo()
             type = residue.GetResidueName().strip()
@@ -272,13 +272,10 @@ class MutationChangeStructure(Dataset):
 
                 atom_names.append(name)
                 Z.append(atom_name2id.get(name, atom_name2id["UNK"]))
-                ## atom ids: here we just use inter residue index
-                atom_ids.append(atom_index_in_residue)
-                atom_index_in_residue+=1
 
                 if residue.GetResidueNumber() != lst_residue or type != lst_residue_type or \
                     name in lst_residue_atom_names:
-                    atom_index_in_residue = 0
+                    atom_index_in_residue = 1 if a_idx==1 else 0
                     num_residue += 1
                     lst_residue = residue.GetResidueNumber()
                     lst_residue_type = type
@@ -287,6 +284,11 @@ class MutationChangeStructure(Dataset):
                     chain_names.append(residue.GetChainId())
                     chain_ids.append(self.chain_dict.get(residue.GetChainId(), -1))
                     residues.append(residue)
+
+                ## atom ids: here we just use inter residue index
+                atom_ids.append(atom_index_in_residue)
+                atom_index_in_residue+=1
+                
                 residue_ids.append(num_residue - 1)
                 lst_residue_atom_names.add(name)
 
