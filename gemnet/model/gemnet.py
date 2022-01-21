@@ -126,6 +126,7 @@ class GemNet(torch.nn.Module):
         add_residue_embedding=False,
         add_chain_embedding=False,
         chain_embedding_scheme="sum",
+        residue_embedding_scheme="add",
         energy_linear_map=False,
         **kwargs,
         ):
@@ -227,7 +228,8 @@ class GemNet(torch.nn.Module):
         self.atom_emb = AtomEmbedding(emb_size_atom, start_from=atom_type_start_from,
                                       add_residue_embedding=add_residue_embedding,
                                       add_chain_embedding=add_chain_embedding,
-                                      chain_embedding_scheme=chain_embedding_scheme)
+                                      chain_embedding_scheme=chain_embedding_scheme,
+                                      residue_embedding_scheme=residue_embedding_scheme)
         self.edge_emb = EdgeEmbedding(
             emb_size_atom, num_radial, emb_size_edge, activation=activation
         )
