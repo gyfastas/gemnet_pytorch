@@ -1,0 +1,88 @@
+runner: "PretrainRunner"
+dataset_class: "EBMDataContainer"
+
+model:
+  num_spherical: 7
+  num_radial: 6
+  num_blocks: 4
+
+  emb_size_atom: 128
+  emb_size_edge: 128
+  emb_size_trip: 64
+  emb_size_quad: 32
+  emb_size_rbf: 16
+  emb_size_cbf: 16
+  emb_size_sbf: 32
+  emb_size_bil_trip: 64
+  emb_size_bil_quad: 32
+
+  num_before_skip: 1
+  num_after_skip: 1
+  num_concat: 1
+  num_atom: 2
+
+  cutoff: 4.0
+  int_cutoff: 8.0
+  triplets_only: False
+  direct_forces: True
+
+  mve: False
+  forces_coupled: False
+  envelope_exponent: 5
+  extensive: True
+
+  scale_file: "scaling_factors.json"
+  atom_type_start_from: 0
+  
+  add_residue_embedding: True
+  add_chain_embedding: True
+  chain_embedding_scheme: "sum"
+
+
+trainer:
+  class: EBMTrainer
+  learning_rate: 0.001
+  decay_steps: 450000
+  decay_rate: 0.01
+  warmup_steps: 3750
+  weight_decay: 0.000002
+  ema_decay: 0.999
+  decay_patience: 5
+  decay_factor: 0.5
+  decay_cooldown: 5
+  grad_clip_max: 10.0
+  staircase: False
+  rho_force: 0.0
+  agc: False
+  loss: "mae"
+  num_negative: 10
+  log_iter: 5
+
+restart: null
+tfseed: 1234
+data_seed: 42
+comment: "GemNet"
+output_init: "HeOrthogonal"
+
+logdir: "logs/dips_pretrain_with_residue_and_chain/"
+
+dataset: 
+  - "data/DIPS/processed/*.npz"
+
+num_train: null # this would be eliminatd
+num_val: null
+num_test: null
+num_neighbors: 64
+num_negative: 10
+rotamer_library_path: "./data/dunbrack-rotamer/original"
+
+main_metric: "log_likelihood"
+metric_mode: "min"
+
+patience: 20
+evaluation_interval: 1
+save_interval: 1
+batch_size: 1
+num_epochs: 100
+iter_per_epoch: null
+early_stop: False

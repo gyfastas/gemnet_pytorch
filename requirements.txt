@@ -12,3 +12,5 @@ torchaudio
 cudatoolkit=10.2
 pytorch-geometric
 easydict
+rdkit-pypi
+dill

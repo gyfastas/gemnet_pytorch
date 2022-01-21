@@ -47,7 +47,7 @@ class BaseTrainer(object):
         for idx, batch in enumerate(islice(data_loader, iter_per_epoch)):
             inputs, targets = batch
             self.forwrad_and_backward(model, metrics, inputs, targets)
-            if idx % 20 == 0 and self.rank==0:
+            if idx % getattr(self, "log_iter", 20) == 0 and self.rank==0:
                 result = metrics.result(append_tag=False)
                 metrics_strings = [
                 f"{key}: {result[key]:.4f}"
@@ -137,6 +137,7 @@ class Trainer(BaseTrainer):
         agc=False,
         finetune_mode=None,
         lr_ratio=0.1,
+        log_iter=20,
     ):
         assert 0 <= rho_force <= 1
         self.model = model
@@ -148,6 +149,7 @@ class Trainer(BaseTrainer):
         self.agc = agc
         self.finetune_mode = finetune_mode
         self.lr_ratio = lr_ratio
+        self.log_iter = log_iter
         self.init_distributed()
 
         self.reset_optimizer(
@@ -755,11 +757,12 @@ class EBMTrainer(Trainer):
             loss: str = "mae",  # else use rmse
             mve: bool = False,
             agc=False,
-            num_negative: int = 1
+            num_negative: int = 1,
+            log_iter: int =20,
     ):
         super(EBMTrainer, self).__init__(model, learning_rate, decay_steps, decay_rate, warmup_steps, weight_decay,
                                          staircase, grad_clip_max, decay_patience, decay_factor, decay_cooldown,
-                                         ema_decay, rho_force, loss, mve, agc)
+                                         ema_decay, rho_force, loss, mve, agc, log_iter=log_iter)
         self.num_negative = num_negative
 
     @property

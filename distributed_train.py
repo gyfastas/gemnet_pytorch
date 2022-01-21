@@ -1,5 +1,5 @@
 import argparse
-import os
+import os, sys
 import logging
 import numpy as np
 import yaml
@@ -17,13 +17,16 @@ import gemnet.training.data_container as data_containers
 from gemnet.training.data_provider import DataProvider
 from easydict import EasyDict
 import torch
+import pprint
+from gemnet.utils.config_utils import update_config, dump_config
+from gemnet.utils import dist_utils
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "1"
 os.environ["AUTOGRAPH_VERBOSITY"] = "1"
 
 def parse_args():
     parser = argparse.ArgumentParser("Running GemNet on ppi mutation change prediction task.")
-    parser.add_argument("--config", type=str, default="./configs/s4169.yaml", 
+    parser.add_argument("--config", "-c", type=str, default="./configs/s4169.yaml", 
                         help="which config file to use")
     parser.add_argument("--local_rank", type=int)
     args, other_args = parser.parse_known_args()
@@ -39,6 +42,7 @@ def build_dataset(config):
 
 if __name__ == "__main__":
     args, other_args = parse_args()
+
 
     logger = logging.getLogger()
     logger.handlers = []
@@ -64,8 +68,15 @@ if __name__ == "__main__":
                 pass
     
     config = EasyDict(config)
+    update_config(config, other_args)
+
     config.model["num_targets"] = 2 if config.model.mve else 1
     torch.manual_seed(config.tfseed)
+
+    config_str = pprint.pformat(config)
+    
+    if dist_utils.get_rank() == 0:
+        logging.info("config:\n {}".format(config_str))
 
     logging.info("Start training")
     num_gpus = torch.cuda.device_count()
@@ -78,10 +89,11 @@ if __name__ == "__main__":
         logging.warning("CUDA unavailable. Training is run on CPU!")
 
     if (config.restart is None) or (config.restart == "None"): 
-        directory = config.logdir + "/" + datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + id_generator() + "_" + "_" + os.path.basename(args.config)
+        directory = os.path.join(config.logdir,  os.path.basename(args.config), datetime.now().strftime("%Y%m%d_%H%M%S"))
     else:
         directory = config.restart
     
+
     logging.info(f"Directory: {directory}")
     logging.info("Create directories")
     if not os.path.exists(directory):
@@ -101,9 +113,12 @@ if __name__ == "__main__":
     log_path_model = f"{log_dir}/model{extension}"
     log_path_training = f"{log_dir}/training{extension}"
     best_path_model = f"{best_dir}/model{extension}"
+    config_save_path = os.path.join(directory, os.path.basename(args.config))
+    dump_config(config, config_save_path)
 
     logging.info("Initialize model")
     model = GemNet(**config.model)
+    logging.info("Building dataset")
     data_container = build_dataset(config)
 
     logger.info(f"Total dataset length: {len(data_container)}")
@@ -114,7 +129,7 @@ if __name__ == "__main__":
 
     logging.info("Prepare training")
 
-    ## load from pretrained
+    ## Load from pretrained
     if "pretrained" in config.keys():
         if os.path.exists(config.pretrained):
             logging.info(f"load pretrained model from {config.pretrained}")
@@ -137,8 +152,6 @@ if __name__ == "__main__":
     metrics_best_test = BestMetrics(best_dir, test_metrics, main_metric=config.main_metric,
                             metric_mode=config.metric_mode)
     
-    metrics_best_val.state["spearman_val"] = 0.0
-    metrics_best_test.state["spearman_test"] = 0.0
     # Set up checkpointing
     # Restore latest checkpoint
     if os.path.exists(log_path_model):
@@ -157,14 +170,12 @@ if __name__ == "__main__":
         metrics_best_val.inititalize()
         step_init = 0
 
-
-            
-
     for epoch in tqdm(range(config.num_epochs)):
         # Perform training step
         trainer.train_on_epoch(data_provider, train_metrics, config.iter_per_epoch)
+        
         # Save progress
-        if epoch % config.save_interval == 0:
+        if epoch % config.save_interval == 0 and trainer.rank==0:
             torch.save({"model": model.state_dict()}, log_path_model)
             torch.save(
                 {"trainer": trainer.state_dict(), "step": epoch}, log_path_training
@@ -177,8 +188,8 @@ if __name__ == "__main__":
             trainer.load_averaged_variables()
 
             # Evaluation
-            trainer.eval_on_epoch(data_provider, val_metrics)
-            trainer.eval_on_epoch(data_provider, test_metrics)
+            trainer.eval_on_epoch(data_provider, val_metrics, split="val")
+            trainer.eval_on_epoch(data_provider, test_metrics, split="test")
 
             # Update and save best result <this is very trainer specific actually
             if trainer.rank==0:
@@ -213,12 +224,13 @@ if __name__ == "__main__":
             trainer.restore_variable_backups()
 
             # early stopping
-            if config.early_stop:
+            if trainer.rank==0 and config.early_stop:
                 if epoch - metrics_best_val.step > config.patience * config.evaluation_interval:
-                    break
+                    logging.info("early stoped.")
 
-    result = {key + "valid_best": val for key, val in metrics_best_val.items()}
-    result_test = {key + "test": val for key, val in metrics_best_test.items()}
-    result.update(result_test)
-    for key, val in result.items():
-        print(f"{key}: {val}")
+                    result = {key + "valid_best": val for key, val in metrics_best_val.items()}
+                    result_test = {key + "test": val for key, val in metrics_best_test.items()}
+                    result.update(result_test)
+                    for key, val in result.items():
+                        logging.info(f"{key}: {val}")
+                        sys.exit(0)

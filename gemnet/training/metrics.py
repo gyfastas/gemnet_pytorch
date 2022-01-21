@@ -4,7 +4,6 @@ import logging
 import torch
 from torch_scatter import scatter_mean
 
-
 class BestMetrics:
     """Class for saving the metrics.
 
@@ -18,6 +17,7 @@ class BestMetrics:
             If True raise UserWarning if the metrics should be restored but None are found.
             If False log Warning and frehsly initilaize the metrics.
     """
+    init_value_dict = {"spearman": -np.inf}
 
     def __init__(self, path, metrics, assert_exist=True, main_metric=None, metric_mode="max"):
         self.path = os.path.join(path, "best_metrics.npz")
@@ -30,7 +30,11 @@ class BestMetrics:
         self.state = {}
 
     def inititalize(self):
-        self.state = {f"{k}_{self.metrics.tag}": np.inf for k in self.metrics.keys}
+        """
+        initialize according to the init value dict else 
+        np.inf by default 
+        """
+        self.state = {f"{k}_{self.metrics.tag}": self.init_value_dict.get(k, np.inf) for k in self.metrics.keys}
         self.state["step"] = 0
         np.savez(self.path, **self.state)
 
@@ -71,10 +75,6 @@ class BestMetrics:
     @property
     def loss(self):
         return self.state["loss_val"]
-
-    @property
-    def spearman(self):
-        return self.state["spearman_val"]
 
     @property
     def step(self):

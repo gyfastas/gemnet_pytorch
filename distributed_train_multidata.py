@@ -1,5 +1,6 @@
 """
 Training with multiple data
+This script is used to pre-train.
 """
 import argparse
 import os
@@ -22,13 +23,16 @@ import gemnet.training.data_container as data_containers
 from gemnet.training.data_provider import DataProvider
 from easydict import EasyDict
 import torch
+import pprint
+from gemnet.utils.config_utils import update_config, dump_config
+from gemnet.utils import dist_utils
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "1"
 os.environ["AUTOGRAPH_VERBOSITY"] = "1"
 
 def parse_args():
     parser = argparse.ArgumentParser("Running GemNet on ppi mutation change prediction task.")
-    parser.add_argument("--config", type=str, default="./configs/s4169.yaml", 
+    parser.add_argument("--config", "-c", type=str, default="./configs/s4169.yaml", 
                         help="which config file to use")
     parser.add_argument("--local_rank", type=int)
     args, other_args = parser.parse_known_args()
@@ -55,8 +59,6 @@ if __name__ == "__main__":
     logger.addHandler(ch)
     logger.setLevel("INFO")
 
-    # TODO: update config with other args.
-
     with open(args.config, 'r') as c:
         config = yaml.safe_load(c)
 
@@ -69,8 +71,16 @@ if __name__ == "__main__":
                 pass
     
     config = EasyDict(config)
+    update_config(config, other_args)
+
     config.model["num_targets"] = 2 if config.model.mve else 1
     torch.manual_seed(config.tfseed)
+
+    config_str = pprint.pformat(config)
+    
+    if dist_utils.get_rank() == 0:
+        logging.info("config:\n {}".format(config_str))
+
 
     logging.info("Start training")
     num_gpus = torch.cuda.device_count()
@@ -83,7 +93,7 @@ if __name__ == "__main__":
         logging.warning("CUDA unavailable. Training is run on CPU!")
 
     if (config.restart is None) or (config.restart == "None"): 
-        directory = config.logdir + "/" + datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + id_generator() + "_" + "_" + os.path.basename(args.config)
+        directory = os.path.join(config.logdir,  os.path.basename(args.config), datetime.now().strftime("%Y%m%d_%H%M%S"))
     else:
         directory = config.restart
     
@@ -106,6 +116,8 @@ if __name__ == "__main__":
     log_path_model = f"{log_dir}/model{extension}"
     log_path_training = f"{log_dir}/training{extension}"
     best_path_model = f"{best_dir}/model{extension}"
+    config_save_path = os.path.join(directory, os.path.basename(args.config))
+    dump_config(config, config_save_path)
 
     logging.info("Initializing model")
     model = GemNet(**config.model)
@@ -172,13 +184,23 @@ if __name__ == "__main__":
                                         random_split=False)
             # Perform training step
             trainer.train_on_epoch(data_provider, train_metrics, config.iter_per_epoch)
-        # Save progress
-        if epoch % config.save_interval == 0:
-            torch.save({"model": model.state_dict()}, log_path_model)
-            torch.save(
-                {"trainer": trainer.state_dict(), "step": epoch}, log_path_training
-            )
+            # Save progress
+            if trainer.rank==0:
+                logging.info("saving latest models after training on data {}".format(new_config.dataset))
+                torch.save({"model": model.state_dict()}, log_path_model)
+                torch.save(
+                    {"trainer": trainer.state_dict(), "step": epoch}, log_path_training
+                )
 
+        # Save progress: non latest
+        if epoch % config.save_interval == 0 and trainer.rank==0:
+            logging.info("saving models for epoch {}".format(epoch))
+            model_save_path = os.path.join(os.path.dirname(log_path_model), "model_{}.pth".format(epoch))
+            trainer_save_path = os.path.join(os.path.dirname(log_path_training), "training_{}.pth".format(epoch))
+            torch.save({"model": model.state_dict()}, model_save_path)
+            torch.save(
+                {"trainer": trainer.state_dict(), "step": epoch}, trainer_save_path
+            )
 
         # Save backup variables and load averaged variables
         trainer.save_variable_backups()

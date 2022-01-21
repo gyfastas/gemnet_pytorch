@@ -28,3 +28,21 @@ Please cite our paper if you use the model or this code in your own work:
 }
 ```
 
+## Distributed Training with powerful command-line configs
+
+Examples:
+
+```
+python3 -m torch.distributed.launch --nproc_per_node=4 --master_port=12312 ./main.py --config ./configs/s4169_mutation_point.yaml
+```
+
+to modify the configs:
+```
+python3 -m torch.distributed.launch --nproc_per_node=4 --master_port=12312 ./main.py --config ./configs/s4169_mutation_point.yaml model.num_radial=9 iter_per_epoch=100
+```
+
+Notes:
+
+Arguments for updating the configs are separated by "=", `model.num_radial 9` would be invalid.
+
+

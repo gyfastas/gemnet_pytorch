@@ -44,10 +44,10 @@ class AtomEmbedding(torch.nn.Module):
         if self.add_residue_embedding:
             h += self.residue_embeddings(residue_types)
         if self.add_chain_embedding:
-            sum_chain_embedding = torch.zeros((self.num_chain_type, self.emb_size), dtype=torch.float32).scatter_add_(
+            sum_chain_embedding = torch.zeros((self.num_chain_type, self.emb_size), dtype=torch.float32, device=h.device).scatter_add_(
                 0, chain_ids.unsqueeze(-1).repeat(1, self.emb_size), h)
-            chain_cnt = torch.zeros(self.num_chain_type, dtype=torch.float32).scatter_add_(
-                0, chain_ids, torch.ones(chain_ids.shape[0], dtype=torch.float32))
+            chain_cnt = torch.zeros(self.num_chain_type, dtype=torch.float32, device=h.device).scatter_add_(
+                0, chain_ids, torch.ones(chain_ids.shape[0], dtype=torch.float32, device=h.device))
             mean_chain_embedding = sum_chain_embedding / (chain_cnt.unsqueeze(-1) + self.eps)
             if self.chain_embedding_scheme == "sum":
                 chain_embedding = sum_chain_embedding[chain_ids]
