@@ -6,7 +6,7 @@ model:
   num_radial: 6
   num_blocks: 4
 
-  emb_size_atom: 128
+  emb_size_atom: 256
   emb_size_edge: 128
   emb_size_trip: 64
   emb_size_quad: 32

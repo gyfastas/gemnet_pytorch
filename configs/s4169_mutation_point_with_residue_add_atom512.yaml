@@ -1,12 +1,17 @@
-runner: "PretrainRunner"
-dataset_class: "EBMDataContainer"
+runner: "DownStreamRunner"
+dataset_class: "PairDataContainer"
+container_class: "MutationPositionDataContainer"
+
+container_configs:
+  num_neighbors: 64
+  pre_compute_topk: False
 
 model:
   num_spherical: 7
   num_radial: 6
   num_blocks: 4
 
-  emb_size_atom: 128
+  emb_size_atom: 512
   emb_size_edge: 128
   emb_size_trip: 64
   emb_size_quad: 32
@@ -33,14 +38,14 @@ model:
 
   scale_file: "scaling_factors.json"
   atom_type_start_from: 0
-  
-  add_residue_embedding: True
-  add_chain_embedding: True
-  chain_embedding_scheme: "sum"
 
+  add_residue_embedding: True
+  add_chain_embedding: False
+  chain_embedding_scheme: "sum"
+  residue_embedding_scheme: "add"
 
 trainer:
-  class: EBMTrainer
+  class: DDGTrainer
   learning_rate: 0.001
   decay_steps: 450000
   decay_rate: 0.01
@@ -54,8 +59,7 @@ trainer:
   staircase: False
   rho_force: 0.0
   agc: False
-  loss: "mae"
-  num_negative: 10
+  loss: "rmse"
   log_iter: 5
 
 restart: null
@@ -64,25 +68,20 @@ data_seed: 42
 comment: "GemNet"
 output_init: "HeOrthogonal"
 
-logdir: "logs/dips_pretrain/"
+logdir: "logs/s4169_mutation_point/"
 
-dataset: 
-  - "data/DIPS/processed/*.npz"
-
-num_train: null # this would be eliminatd
-num_val: null
-num_test: null
-num_neighbors: 64
-num_negative: 10
-rotamer_library_path: "./data/dunbrack-rotamer/original"
-
-main_metric: "log_likelihood"
-metric_mode: "min"
-
+dataset_wt: "data/s4169/wild_type.npz"
+dataset_mt: "data/s4169/mutants.npz"
+num_train: 3361
+num_val: 382
+num_test: 425
+main_metric: "spearman"
+metric_mode: "max"
+  
 patience: 20
 evaluation_interval: 1
-save_interval: 1
-batch_size: 1
+save_interval: 10
+batch_size: 4
 num_epochs: 100
 iter_per_epoch: null
-early_stop: False
+early_stop: True

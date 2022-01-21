@@ -42,6 +42,7 @@ model:
   add_residue_embedding: False
   add_chain_embedding: False
   chain_embedding_scheme: "sum"
+  residue_embedding_scheme: "concat"
 
 trainer:
   class: DDGTrainer

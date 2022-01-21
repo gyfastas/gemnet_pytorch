@@ -52,8 +52,8 @@ class AtomEmbedding(torch.nn.Module):
             else:
                 raise ValueError("Residue embedding scheme {} is not supported.".format(self.residue_embedding_scheme))
         if self.add_chain_embedding:
-            sum_chain_embedding = torch.zeros((self.num_chain_type, self.emb_size), dtype=torch.float32, device=h.device).scatter_add_(
-                0, chain_ids.unsqueeze(-1).repeat(1, self.emb_size), h)
+            sum_chain_embedding = torch.zeros((self.num_chain_type, h.shape[-1]), dtype=torch.float32, device=h.device).scatter_add_(
+                0, chain_ids.unsqueeze(-1).repeat(1, h.shape[-1]), h)
             chain_cnt = torch.zeros(self.num_chain_type, dtype=torch.float32, device=h.device).scatter_add_(
                 0, chain_ids, torch.ones(chain_ids.shape[0], dtype=torch.float32, device=h.device))
             mean_chain_embedding = sum_chain_embedding / (chain_cnt.unsqueeze(-1) + self.eps)

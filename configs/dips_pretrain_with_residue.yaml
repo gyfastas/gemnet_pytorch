@@ -6,7 +6,7 @@ model:
   num_radial: 6
   num_blocks: 4
 
-  emb_size_atom: 128
+  emb_size_atom: 256
   emb_size_edge: 128
   emb_size_trip: 64
   emb_size_quad: 32
@@ -37,6 +37,7 @@ model:
   add_residue_embedding: True
   add_chain_embedding: False
   chain_embedding_scheme: "sum"
+  residue_embedding_scheme: "concat"
 
 
 trainer:
@@ -64,7 +65,7 @@ data_seed: 42
 comment: "GemNet"
 output_init: "HeOrthogonal"
 
-logdir: "logs/dips_pretrain_with_residue/"
+logdir: "logs/dips_pretrain/"
 
 dataset: 
   - "data/DIPS/processed/*.npz"
