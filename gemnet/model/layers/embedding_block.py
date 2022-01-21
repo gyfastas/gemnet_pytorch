@@ -14,23 +14,49 @@ class AtomEmbedding(torch.nn.Module):
             Atom embeddings size
     """
 
-    def __init__(self, emb_size, name=None, start_from=1):
+    eps = 1e-6
+    num_chain_type = 2
+
+    def __init__(self, emb_size, name=None, start_from=1, add_residue_embedding=False, add_chain_embedding=False,
+                 chain_embedding_scheme="sum"):
         super().__init__()
+        emb_size = emb_size // 2 if add_chain_embedding else emb_size
         self.emb_size = emb_size
         self.start_from = start_from
+        self.add_residue_embedding = add_residue_embedding
+        self.add_chain_embedding = add_chain_embedding
+        self.chain_embedding_scheme = chain_embedding_scheme
         # Atom embeddings: We go up to Pu (94). Use 93 dimensions because of 0-based indexing
-        self.embeddings = torch.nn.Embedding(93, emb_size)
+        self.atom_embeddings = torch.nn.Embedding(93, emb_size)
+        self.residue_embeddings = torch.nn.Embedding(30, emb_size)
         # init by uniform distribution
-        torch.nn.init.uniform_(self.embeddings.weight, a=-np.sqrt(3), b=np.sqrt(3))
+        torch.nn.init.uniform_(self.atom_embeddings.weight, a=-np.sqrt(3), b=np.sqrt(3))
+        torch.nn.init.uniform_(self.residue_embeddings.weight, a=-np.sqrt(3), b=np.sqrt(3))
 
-    def forward(self, Z):
+    def forward(self, Z, residue_types, chain_ids):
         """
         Returns
         -------
             h: Tensor, shape=(nAtoms, emb_size)
                 Atom embeddings.
         """
-        h = self.embeddings(Z - self.start_from)  # -1 because Z.min()=1 (==Hydrogen)
+        h = self.atom_embeddings(Z - self.start_from)  # -1 because Z.min()=1 (==Hydrogen)
+        if self.add_residue_embedding:
+            h += self.residue_embeddings(residue_types)
+        if self.add_chain_embedding:
+            sum_chain_embedding = torch.zeros((self.num_chain_type, self.emb_size), dtype=torch.float32).scatter_add_(
+                0, chain_ids.unsqueeze(-1).repeat(1, self.emb_size), h)
+            chain_cnt = torch.zeros(self.num_chain_type, dtype=torch.float32).scatter_add_(
+                0, chain_ids, torch.ones(chain_ids.shape[0], dtype=torch.float32))
+            mean_chain_embedding = sum_chain_embedding / (chain_cnt.unsqueeze(-1) + self.eps)
+            if self.chain_embedding_scheme == "sum":
+                chain_embedding = sum_chain_embedding[chain_ids]
+            elif self.chain_embedding_scheme == "mean":
+                chain_embedding = mean_chain_embedding[chain_ids]
+            else:
+                raise ValueError("Chain embedding scheme {} is not supported.".format(self.chain_embedding_scheme))
+            h = torch.cat([h, chain_embedding], dim=-1)
+
         return h
 
 

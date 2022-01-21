@@ -123,6 +123,9 @@ class GemNet(torch.nn.Module):
         scale_file=None,
         name="gemnet",
         atom_type_start_from=1,
+        add_residue_embedding=False,
+        add_chain_embedding=False,
+        chain_embedding_scheme="sum",
         energy_linear_map=False,
         **kwargs,
         ):
@@ -221,7 +224,10 @@ class GemNet(torch.nn.Module):
         ### ------------------------------------------------------------------------------------- ###
 
         # Embedding block
-        self.atom_emb = AtomEmbedding(emb_size_atom, start_from=atom_type_start_from)
+        self.atom_emb = AtomEmbedding(emb_size_atom, start_from=atom_type_start_from,
+                                      add_residue_embedding=add_residue_embedding,
+                                      add_chain_embedding=add_chain_embedding,
+                                      chain_embedding_scheme=chain_embedding_scheme)
         self.edge_emb = EdgeEmbedding(
             emb_size_atom, num_radial, emb_size_edge, activation=activation
         )
@@ -470,7 +476,7 @@ class GemNet(torch.nn.Module):
         return GemNet.calculate_neighbor_angles(R_ac, R_ab)  # (nTriplets,)
 
     def forward(self, inputs):
-        Z, R = inputs["Z"], inputs["R"]
+        Z, R, residue_types, chain_ids = inputs["Z"], inputs["R"], inputs["residue_types"], inputs["chain_ids"]
         id_a, id_c, id_undir, id_swap = (
             inputs["id_a"],
             inputs["id_c"],
@@ -544,7 +550,7 @@ class GemNet(torch.nn.Module):
         cbf3 = self.cbf_basis3(D_ca, Angles3_cab, id3_reduce_ca, Kidx3)
 
         # Embedding block
-        h = self.atom_emb(Z)  # (nAtoms, emb_size_atom)
+        h = self.atom_emb(Z, residue_types, chain_ids)  # (nAtoms, emb_size_atom)
         m = self.edge_emb(h, rbf, id_c, id_a)  # (nEdges, emb_size_edge)
 
         # Shared Down Projections
@@ -654,7 +660,8 @@ class GemNet(torch.nn.Module):
             src.data.copy_(W)
 
         copy_(self.rbf_basis.frequencies, "rbf_basis/frequencies")
-        copy_(self.atom_emb.embeddings.weight, "atom_emb/embeddings")
+        copy_(self.atom_emb.atom_embeddings.weight, "atom_emb/atom_embeddings")
+        copy_(self.atom_emb.residue_embeddings.weight, "atom_emb/residue_embeddings")
         copy_(self.edge_emb.dense.weight, "edge_emb/dense/kernel")
 
         shared_mlps = ["mlp_cbf3", "mlp_rbf3", "mlp_rbf_h", "mlp_rbf_out"]
