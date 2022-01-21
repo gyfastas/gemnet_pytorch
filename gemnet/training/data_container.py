@@ -5,6 +5,8 @@ import scipy.sparse as sp
 import numba
 import torch
 from gemnet.training.rotamer_utils import RotamerBase
+import logging
+from tqdm import tqdm
 
 class DataContainer:
     """
@@ -634,8 +636,8 @@ class MutationPositionDataContainer(DataContainer):
         if self.pre_compute_topk:
             self.topk_indices = list()
             protein_ids = list(range(self.__len__()))
-            for protein_id, residue_id in zip(protein_ids, self.mutation_position):
-                num_atom = self.num_neighbors
+            for protein_id, residue_id in tqdm(zip(protein_ids, self.mutation_position)):
+                num_atom = min(self.num_neighbors, self.N[protein_id])
                 topk_index = self.get_topk_atoms(protein_id, residue_id, num_atom)
                 self.topk_indices.append(topk_index)
 
@@ -651,9 +653,12 @@ class MutationPositionDataContainer(DataContainer):
         atom_positions = self.R[start:end]
         residue_ids = self.residue_ids[start:end]
         atom_ids = self.atom_ids[start:end]
-        target_residue_CB = (residue_ids == residue_id) & (atom_ids == 0)
+        target_residue_CB = (residue_ids == residue_id) & (atom_ids == 4)
+        if target_residue_CB.sum() < 1: # no beta carbon
+            target_residue_CB = (residue_ids == residue_id) & (atom_ids == 1)
+
         target_residue_CB_position = atom_positions[target_residue_CB]
-        assert target_residue_CB_position.shape[0] == 1
+        assert target_residue_CB_position.shape[0] == 1 # if multiple beta carbon, it is probelmatic
         all_dist = ((atom_positions - target_residue_CB_position) ** 2).sum(-1)
         is_target_residue = (residue_ids == residue_id)
         all_dist[is_target_residue] = 0.0
