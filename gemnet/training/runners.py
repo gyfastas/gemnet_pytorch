@@ -195,6 +195,8 @@ class DownStreamRunner(BaseRunner):
     """
     
     def run(self):
+        best_epoch = -1
+
         for epoch in tqdm(range(self.config.num_epochs)):
             # Perform training step
             self.trainer.train_on_epoch(self.data_provider, self.train_metrics, self.config.iter_per_epoch)
@@ -219,18 +221,21 @@ class DownStreamRunner(BaseRunner):
                 # Update and save best result <this is very trainer specific actually
                 if self.trainer.rank==0:
                     if self.metrics_best_val.is_best(self.val_metrics):
+                        best_epoch = epoch
                         last_best =  self.metrics_best_val.main_metric
                         self.metrics_best_val.update(epoch, self.val_metrics)
                         self.metrics_best_test.update(epoch, self.test_metrics)
                         logging.info(f"best {self.metrics_best_val.main_metric_name} on valid update: {last_best} => {self.metrics_best_val.main_metric}")
                         logging.info(f"current spearman rho on test: {self.metrics_best_test.main_metric}")
                         torch.save(self.model.state_dict(), self.best_path_model)
-
+                    else:
+                        logging.info(f"best {self.metrics_best_val.main_metric_name} on valid unchanged, best epoch: {best_epoch} , value: {self.metrics_best_val.main_metric}")
+                        logging.info(f"best valid model {self.metrics_best_test.main_metric_name} on test: {self.metrics_best_test.main_metric}")
                 train_metrics_res = self.train_metrics.result(append_tag=False)
                 val_metrics_res = self.val_metrics.result(append_tag=False)
                 test_metrics_res = self.test_metrics.result(append_tag=False)
                 metrics_strings = [
-                    f"{key}: train={train_metrics_res[key]:.6f}, val={val_metrics_res[key]:.6f}, test={test_metrics_res[key]:.6f}"
+                    f"{key}: train={train_metrics_res[key]:.6f}, val={val_metrics_res[key]:.6f}, test={test_metrics_res[key]:.6f} \n"
                     for key in self.val_metrics.keys
                 ]
                 if self.trainer.rank==0:
@@ -253,8 +258,8 @@ class DownStreamRunner(BaseRunner):
                     if epoch - self.metrics_best_val.step > self.config.patience * self.config.evaluation_interval:
                         logging.info("early stoped.")
 
-                        result = {key + "valid_best": val for key, val in metrics_best_val.items()}
-                        result_test = {key + "test": val for key, val in metrics_best_test.items()}
+                        result = {key + "valid_best": val for key, val in self.metrics_best_val.items()}
+                        result_test = {key + "test": val for key, val in self.metrics_best_test.items()}
                         result.update(result_test)
                         for key, val in result.items():
                             logging.info(f"{key}: {val}")
