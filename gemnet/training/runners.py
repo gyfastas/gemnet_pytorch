@@ -223,7 +223,7 @@ class DownStreamRunner(BaseRunner):
                         self.metrics_best_val.update(epoch, self.val_metrics)
                         self.metrics_best_test.update(epoch, self.test_metrics)
                         logging.info(f"best {self.metrics_best_val.main_metric_name} on valid update: {last_best} => {self.metrics_best_val.main_metric}")
-                        logging.info(f"current spearman rho on test: {metrics_best_test.main_metric}")
+                        logging.info(f"current spearman rho on test: {self.metrics_best_test.main_metric}")
                         torch.save(self.model.state_dict(), self.best_path_model)
 
                 train_metrics_res = self.train_metrics.result(append_tag=False)

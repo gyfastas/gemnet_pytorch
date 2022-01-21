@@ -8,6 +8,7 @@ from gemnet.training import metrics
 import torch.nn as nn
 from itertools import islice
 import torch.distributed as dist
+from tqdm import tqdm
 
 class BaseTrainer(object):
     """
@@ -716,7 +717,7 @@ class DDGTrainer(Trainer):
         with torch.no_grad():
             all_energies = list()
             all_targets = list()
-            for batch in data_loader:
+            for batch in tqdm(data_loader):
                 inputs, targets = batch
                 energy, targets = self.pred_on_batch(batch)
                 
