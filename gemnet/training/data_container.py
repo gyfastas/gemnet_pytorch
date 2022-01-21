@@ -679,6 +679,9 @@ class MutationPositionDataContainer(DataContainer):
         data["R"] = np.zeros([np.sum(data["N"]), 3], dtype=np.float32)
         data["F"] = np.zeros([np.sum(data["N"]), 3], dtype=np.float32)
 
+        data["residue_types"] = np.zeros(np.sum(data["N"]), dtype=np.int32)
+        data["chain_ids"] = np.zeros(np.sum(data["N"]), dtype=np.int32)
+
         nend = 0
         adj_matrices = []
         adj_matrices_int = []
@@ -695,6 +698,9 @@ class MutationPositionDataContainer(DataContainer):
             data["Z"][nstart:nend] = self.Z[topk_indices]
             R = self.R[topk_indices]
             data["R"][nstart:nend] = R
+
+            data["residue_types"][nstart:nend] = self.residue_types[self.residue_ids[topk_indices]]
+            data["chain_ids"][nstart:nend] = self.relative_chain_ids[self.residue_ids[topk_indices]]
 
             D_ij = np.linalg.norm(R[:, None, :] - R[None, :, :], axis=-1)
             # get adjacency matrix for embeddings
@@ -742,7 +748,7 @@ class EBMDataContainer(DataContainer):
             "residue_types",
             "is_interface",
             "atom_ids", 
-            "chian_ids", 
+            "chain_ids", 
             "num_residue"
         ]
         if not triplets_only:
@@ -766,7 +772,8 @@ class EBMDataContainer(DataContainer):
         self.num_neighbors = num_neighbors
         self.num_negative = num_negative
         self.rotamer = RotamerBase(library_path=rotamer_library_path)
-        self.keys = ["N", "Z", "R", "F", "E", "residue_ids", "residue_types", "is_interface", "atom_ids", "chain_ids", "num_residue"]
+        self.keys = ["N", "Z", "R", "F", "E", "residue_ids", "residue_types", "is_interface", "atom_ids", 
+                    "chain_ids", "num_residue"]
         if addID:
             self.keys += ["id"]
 
@@ -923,6 +930,9 @@ class EBMDataContainer(DataContainer):
         data["F"] = np.zeros([np.sum(data["N"]), 3], dtype=np.float32)
         data["sampled_residue"] = self.sample_residue(idx)
 
+        data["residue_types"] = np.zeros(np.sum(data["N"]), dtype=np.int32)
+        data["chain_ids"] = np.zeros(np.sum(data["N"]), dtype=np.int32)
+
         nend = 0
         adj_matrices = []
         adj_matrices_int = []
@@ -934,6 +944,9 @@ class EBMDataContainer(DataContainer):
             data["Z"][nstart:nend] = self.Z[topk_indices]
             R = self.R[topk_indices]
             data["R"][nstart:nend] = R
+
+            data["residue_types"][nstart:nend] = self.residue_types[self.residue_ids[topk_indices]]
+            data["chain_ids"][nstart:nend] = self.chain_ids[self.residue_ids[topk_indices]]
 
             D_ij = np.linalg.norm(R[:, None, :] - R[None, :, :], axis=-1)
             # get adjacency matrix for embeddings
@@ -964,7 +977,9 @@ class EBMDataContainer(DataContainer):
             negative_data["Z"] = np.zeros(np.sum(negative_data["N"]), dtype=np.int32)
             negative_data["R"] = np.zeros([np.sum(negative_data["N"]), 3], dtype=np.float32)
             negative_data["F"] = np.zeros([np.sum(negative_data["N"]), 3], dtype=np.float32)
-
+            negative_data["residue_types"] = np.zeros(np.sum(negative_data["N"]), dtype=np.int32)
+            negative_data["chain_ids"] = np.zeros(np.sum(negative_data["N"]), dtype=np.int32)
+            
             nend = 0
             for protein_id, sampled_residue_index, num_atom in zip(idx, negative_data["sampled_residue"], negative_data["N"]):
                 rotated_atom_positions = self.rotate_single_side_chain(protein_id, sampled_residue_index)
@@ -976,6 +991,9 @@ class EBMDataContainer(DataContainer):
                 negative_data["Z"][nstart:nend] = self.Z[topk_indices]
                 R = rotated_atom_positions[topk_indices - self.N_cumsum[protein_id]]
                 negative_data["R"][nstart:nend] = R
+
+                negative_data["residue_types"][nstart:nend] = self.residue_types[self.residue_ids[topk_indices]]
+                negative_data["chain_ids"][nstart:nend] = self.chain_ids[self.residue_ids[topk_indices]]
 
                 D_ij = np.linalg.norm(R[:, None, :] - R[None, :, :], axis=-1)
                 # get adjacency matrix for embeddings
