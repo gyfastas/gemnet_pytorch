@@ -72,16 +72,17 @@ for folder_name in sorted(os.listdir(src_path)):
                 chain1_atom_cnt = torch.zeros(chain1_atom2residue.max() + 1, dtype=torch.long).scatter_add_(
                     0, chain1_atom2residue, torch.ones(len(chain1), dtype=torch.long))
                 chain1_atom_cnt = chain1_atom_cnt[chain1_atom_cnt != 0]
-                chain1_residue_ids_ = torch.repeat_interleave(torch.arange(_residue_id, _residue_id + len(chain1_residue_names)), chain1_atom_cnt)
-                _residue_id += len(chain1_residue_names)
+                chain1_residue_ids_ = torch.repeat_interleave(torch.arange(
+                    _residue_id, _residue_id + len(chain1_residue_names)), chain1_atom_cnt)
 
                 chain2_atom2residue = torch.tensor([int(res) for res in chain2.residue], dtype=torch.long)
                 chain2_atom2residue += max(0, -chain2_atom2residue.min())
                 chain2_atom_cnt = torch.zeros(chain2_atom2residue.max() + 1, dtype=torch.long).scatter_add_(
                     0, chain2_atom2residue, torch.ones(len(chain2), dtype=torch.long))
                 chain2_atom_cnt = chain2_atom_cnt[chain2_atom_cnt != 0]
-                chain2_residue_ids_ = torch.repeat_interleave(torch.arange(_residue_id, _residue_id + len(chain2_residue_names)), chain2_atom_cnt)
-                _residue_id += len(chain2_residue_names)
+                chain2_residue_ids_ = torch.repeat_interleave(torch.arange(
+                    _residue_id + len(chain1_residue_names), _residue_id + len(chain1_residue_names) + len(chain2_residue_names)), chain2_atom_cnt)
+                _residue_id += (len(chain1_residue_names) + len(chain2_residue_names))
 
                 chain1_atom_positions = np.stack([np.array(chain1.x), np.array(chain1.y), np.array(chain1.z)], axis=1)
                 chain2_atom_positions = np.stack([np.array(chain2.x), np.array(chain2.y), np.array(chain2.z)], axis=1)
@@ -139,3 +140,19 @@ for folder_name in sorted(os.listdir(src_path)):
             _sample_id = 0
             _residue_id = 0
             data_dict = {field: [] for field in all_fields}
+
+if len(data_dict["E"]) > 0:
+    data_dict = {k: np.array(v) for k, v in data_dict.items()}
+    print(data_dict["E"].shape)
+    print(data_dict["N"].shape)
+    print(data_dict["residue_names"].shape)
+    print(data_dict["residue_types"].shape)
+    print(data_dict["F"].shape)
+    print(data_dict["residue_ids"].shape)
+    print(data_dict["atom_ids"].shape)
+    print(data_dict["R"].shape)
+    print(data_dict["Z"].shape)
+
+    save_name = os.path.join(tgt_path, "DIPS_split_{}.npz".format(_split_id))
+    np.savez(save_name, **data_dict)
+    print("Save to: ", save_name)
