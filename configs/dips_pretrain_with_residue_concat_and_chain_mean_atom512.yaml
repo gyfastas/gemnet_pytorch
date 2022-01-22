@@ -6,7 +6,7 @@ model:
   num_radial: 6
   num_blocks: 4
 
-  emb_size_atom: 128
+  emb_size_atom: 512
   emb_size_edge: 128
   emb_size_trip: 64
   emb_size_quad: 32
@@ -36,7 +36,8 @@ model:
   
   add_residue_embedding: True
   add_chain_embedding: True
-  chain_embedding_scheme: "sum"
+  chain_embedding_scheme: "mean"
+  residue_embedding_scheme: "concat"
 
 
 trainer:
