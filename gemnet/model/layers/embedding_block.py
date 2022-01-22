@@ -12,10 +12,15 @@ class AtomEmbedding(torch.nn.Module):
     ----------
         emb_size: int
             Atom embeddings size
+        chain_embedding_scheme: "sum" or "mean"
+        residue_embedding_scheme: "add", "concat" or "expand_vocab"
     """
 
     eps = 1e-6
     num_chain_type = 2
+    raw_atom_size = 93
+    local_atom_size = 40
+    residue_size = 30
 
     def __init__(self, emb_size, name=None, start_from=1, add_residue_embedding=False, add_chain_embedding=False,
                  chain_embedding_scheme="sum", residue_embedding_scheme="add"):
@@ -29,8 +34,11 @@ class AtomEmbedding(torch.nn.Module):
         self.chain_embedding_scheme = chain_embedding_scheme
         self.residue_embedding_scheme = residue_embedding_scheme
         # Atom embeddings: We go up to Pu (94). Use 93 dimensions because of 0-based indexing
-        self.atom_embeddings = torch.nn.Embedding(93, emb_size)
-        self.residue_embeddings = torch.nn.Embedding(30, emb_size)
+        self.atom_embeddings = torch.nn.Embedding(self.raw_atom_size, emb_size)
+        if add_residue_embedding and residue_embedding_scheme == "expand_vocab":
+            self.residue_embeddings = torch.nn.Embedding(self.local_atom_size * self.residue_size, emb_size)
+        else:
+            self.residue_embeddings = torch.nn.Embedding(self.residue_size, emb_size)
         # init by uniform distribution
         torch.nn.init.uniform_(self.atom_embeddings.weight, a=-np.sqrt(3), b=np.sqrt(3))
         torch.nn.init.uniform_(self.residue_embeddings.weight, a=-np.sqrt(3), b=np.sqrt(3))
@@ -44,11 +52,15 @@ class AtomEmbedding(torch.nn.Module):
         """
         h = self.atom_embeddings(Z - self.start_from)  # -1 because Z.min()=1 (==Hydrogen)
         if self.add_residue_embedding:
-            residue_embedding = self.residue_embeddings(residue_types)
             if self.residue_embedding_scheme == "concat":
+                residue_embedding = self.residue_embeddings(residue_types)
                 h = torch.cat([h, residue_embedding], dim=-1)
             elif self.residue_embedding_scheme == "add":
+                residue_embedding = self.residue_embeddings(residue_types)
                 h += residue_embedding
+            elif self.residue_embedding_scheme == "expand_vocab":
+                local_atom_types = residue_types * self.local_atom_size + Z - self.start_from
+                h = self.residue_embeddings(local_atom_types)
             else:
                 raise ValueError("Residue embedding scheme {} is not supported.".format(self.residue_embedding_scheme))
         if self.add_chain_embedding:
