@@ -85,3 +85,4 @@ batch_size: 4
 num_epochs: 100
 iter_per_epoch: null
 early_stop: True
+pretrained: ""

@@ -43,6 +43,7 @@ model:
   add_chain_embedding: False
   chain_embedding_scheme: "sum"
   residue_embedding_scheme: "concat"
+  energy_linear_map: False
 
 trainer:
   class: DDGTrainer
@@ -61,6 +62,7 @@ trainer:
   agc: False
   loss: "rmse"
   log_iter: 5
+  finetune_mode: null
 
 restart: null
 tfseed: 1234
@@ -85,3 +87,4 @@ batch_size: 4
 num_epochs: 100
 iter_per_epoch: null
 early_stop: True
+pretrained: ""
