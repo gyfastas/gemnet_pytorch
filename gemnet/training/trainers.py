@@ -307,6 +307,8 @@ class Trainer(BaseTrainer):
                 self.model.energy_map_blocks.apply(self._init_weights)
             else:
                 self.model.out_blocks.apply(self._init_weights)
+        elif self.finetune_mode == "tune_all":
+            self.model.out_blocks.apply(self._init_weights)
 
         self.exp_decay = ExponentialMovingAverage(
             [p for p in self.model.parameters() if p.requires_grad], self.ema_decay
