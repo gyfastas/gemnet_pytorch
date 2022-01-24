@@ -774,6 +774,7 @@ class EBMTrainer(Trainer):
 
     def get_log_likelihood(self, all_energy, eps=1e-6):
         all_energy = all_energy.view(-1).view(self.num_negative + 1, -1).permute(1, 0).clamp(-1e2, 1e2)  # (B, N_neg + 1)
+        all_energy[torch.isnan(all_energy)] = 1e2
         labels = torch.zeros(all_energy.shape[0], dtype=torch.long, device=all_energy.device)
         return -nn.functional.cross_entropy(all_energy, labels)
 
@@ -781,8 +782,13 @@ class EBMTrainer(Trainer):
         inputs, targets = self.dict2device(inputs), self.dict2device(targets)
         mean_energy, var_energy, mean_forces, var_forces = self.predict(inputs, model)
         energy_mae = self.get_mae(targets["E"], mean_energy)
+        energy_mae[torch.isnan(energy_mae)] = 0.0
         force_mae = self.get_mae(targets["F"], mean_forces)
+        force_mae[torch.isnan(force_mae)] = 0.0
         log_likelihood = self.get_log_likelihood(mean_energy)
+        if torch.isnan(log_likelihood).any():
+            logging.warning("log likelihood loss is nan!")
+        log_likelihood[torch.isnan(log_likelihood)] = 0.0
         loss = -log_likelihood + 0.0 * energy_mae + 0.0 * force_mae
 
         self.optimizers.zero_grad()
