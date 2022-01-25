@@ -661,8 +661,14 @@ class MutationPositionDataContainer(DataContainer):
         assert target_residue_CB_position.shape[0] == 1 # if multiple beta carbon, it is probelmatic
         all_dist = ((atom_positions - target_residue_CB_position) ** 2).sum(-1)
         is_target_residue = (residue_ids == residue_id)
+
         all_dist[is_target_residue] = 0.0
-        topk_indices = np.argsort(all_dist)[:num_atom] + start # to variadic
+        topk_indices = np.argsort(all_dist)[:num_atom]
+
+        ## the topk indices is refined again according to the real distance
+        topk_dist = ((atom_positions[topk_indices] - target_residue_CB_position)**2).sum(-1)
+        topk_dist_order = topk_dist.argsort()
+        topk_indices = topk_indices[topk_dist_order] + start # to variadic
         return topk_indices
 
     def __getitem__(self, idx):
@@ -699,6 +705,7 @@ class MutationPositionDataContainer(DataContainer):
                 topk_indices = self.get_topk_atoms(protein_id, residue_id, num_atom)
             nstart = nend
             nend = nstart + num_atom
+
             data["F"][nstart:nend] = self.F[topk_indices]
             data["Z"][nstart:nend] = self.Z[topk_indices]
             R = self.R[topk_indices]
