@@ -852,7 +852,7 @@ class EBMTrainer(Trainer):
         safe_grad = True
         for param in self.model.parameters():
             if getattr(param, "grad", None) is not None:
-                if torch.isnan(param.grad).any():
+                if torch.isnan(param.grad).any() or torch.isinf(param.grad).any():
                     safe_grad = False
                     print("warning! found nan grad")
                     break
