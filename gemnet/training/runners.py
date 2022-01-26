@@ -175,7 +175,7 @@ class BaseRunner(object):
                                 metric_mode=self.config.metric_mode)
     
     def resume(self):
-        if os.path.exists(self.config.get("resume", "")):
+        if self.config.get("resume", None) is not None:
             resume_dir = os.path.dirname(self.config.get("resume", ""))
             resume_epoch = self.config.get("resume_epoch", None)
             if resume_epoch is None:
