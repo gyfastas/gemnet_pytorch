@@ -128,6 +128,7 @@ class GemNet(torch.nn.Module):
         chain_embedding_scheme="sum",
         residue_embedding_scheme="add",
         energy_linear_map=False,
+        emb_diff_scheme="atom_diff",
         **kwargs,
         ):
         super().__init__()
@@ -136,6 +137,7 @@ class GemNet(torch.nn.Module):
         self.num_blocks = num_blocks
         self.extensive = extensive
         self.energy_linear_map = energy_linear_map
+        self.emb_diff_scheme = emb_diff_scheme
 
         self.forces_coupled = forces_coupled
 
@@ -858,7 +860,18 @@ class GemNet(torch.nn.Module):
 class AtomDiffGemNet(GemNet):
     """We adapt the gemnet to mutation change prediction task
     by first aggregate the atom level embedding difference to molecule level embedding difference 
-    and then a output block maps the embedding difference to energy. 
+    and then a output block maps the embedding difference to energy.
+
+    Key parameters in this class:
+    ----------
+        emb_diff_scheme: str
+            (1) "atom_diff": sort atoms according to their distance towards the CB of mutate residue;
+                                compute per-atom embedding difference before and after mutation;
+                                aggregate the embedding difference of all atoms for MLP prediction.
+            (2) "graph_diff": get the graph embedding of the atom systems before and after mutation;
+                                compute the graph embedding difference for MLP prediction.
+            (3) "cb_diff": get the embedding of the CB of mutate residue before and after mutation;
+                                compute the CB embedding difference for MLP prediction.
     """
     def base_extract(self, inputs):
         """
@@ -933,16 +946,28 @@ class AtomDiffGemNet(GemNet):
         mutant_atom_feature = self.out_blocks[output_layer].atom_feature_extract(inputs_mt['h'], inputs_mt['m'], 
                                             inputs_mt['rbf_out'], inputs_mt['id_a'])
 
-        feature_diff = mutant_atom_feature - wild_type_atom_feature
+        # Compute embedding difference
         # (nAtoms, emb_size_atom) => (nMolecule, emb_size_atom)
         batch_seg = inputs_wt['batch_seg']
-        
         nMolecules = torch.max(batch_seg) + 1
-        if self.extensive: # default is true, use scatter add
-            feature_diff = scatter(feature_diff, batch_seg, dim=0, dim_size=nMolecules, reduce="add") 
+        if self.emb_diff_scheme == "atom_diff":
+            feature_diff = mutant_atom_feature - wild_type_atom_feature
+            if self.extensive:  # default is true, use sum pooling
+                feature_diff = scatter(feature_diff, batch_seg, dim=0, dim_size=nMolecules, reduce="add")
+            else:
+                feature_diff = scatter(feature_diff, batch_seg, dim=0, dim_size=nMolecules, reduce="mean")
+        elif self.emb_diff_scheme == "graph_diff":
+            if self.extensive:  # default is true, use sum pooling
+                wild_type_graph_feature = scatter(wild_type_atom_feature, batch_seg, dim=0, dim_size=nMolecules, reduce="add")
+                mutant_graph_feature = scatter(mutant_atom_feature, batch_seg, dim=0, dim_size=nMolecules, reduce="add")
+            else:
+                wild_type_graph_feature = scatter(wild_type_atom_feature, batch_seg, dim=0, dim_size=nMolecules, reduce="mean")
+                mutant_graph_feature = scatter(mutant_atom_feature, batch_seg, dim=0, dim_size=nMolecules, reduce="mean")
+            feature_diff = mutant_graph_feature - wild_type_graph_feature
         else:
-            feature_diff = scatter(feature_diff, batch_seg, dim=0, dim_size=nMolecules, reduce="mean")  
+            raise ValueError("Embedding difference scheme {} is not supported.".format(self.emb_diff_scheme))
 
+        # Predict energy change based on embedding difference
         # (nMolecules, emb_size_atom) => (nMolecules, num_targets)
         E_a = self.out_blocks[output_layer].out_energy(feature_diff)
         return E_a
