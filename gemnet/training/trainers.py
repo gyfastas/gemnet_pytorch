@@ -35,6 +35,7 @@ class BaseTrainer(object):
         GYF: we support distributed training in this function.
         """
         if self.world_size > 1 and dist.is_initialized():
+            logging.info("getting distributed loader")
             data_loader = data_provider.get_distributed_loader("train", self.world_size, self.rank)
         else:
             data_loader = data_provider.get_loader("train")
@@ -735,6 +736,64 @@ class DDGTrainer(Trainer):
         metric_dict["spearman"] = rho
         metric_dict["nsamples"] = pred.shape[0]
         return metric_dict
+
+class DDGAtomDiffTrainer(DDGTrainer):
+    """Trainer that use atom embedding diff with an MLP to predict the ddG change.
+    
+    We change the interface of the model
+    """
+    def predict(self, inputs_wt, inputs_mt, model=None):
+        if model is None:
+            model = self.model
+        ddG_change = model(inputs_wt, inputs_mt) # see AtomDiffGemNet for more details
+        return ddG_change
+
+    def forwrad_and_backward(self, model, metrics, inputs, targets):
+        inputs_wt, inputs_mt = inputs
+        targets, targets_1 = targets
+        # push to GPU if available
+        inputs_wt, inputs_mt, targets, targets_1 = self.dict2device(inputs_wt), self.dict2device(inputs_mt), self.dict2device(targets), self.dict2device(targets_1)
+        ddG_prediction = self.predict(inputs_wt, inputs_mt, model)
+
+        loss = self.get_mae(targets['E'], ddG_prediction)
+
+        self.optimizers.zero_grad()
+        loss.backward()
+        self.model.scale_shared_grads()
+
+        if self.agc:
+            training_utils.adaptive_gradient_clipping(
+                self.params_except_last, clip_factor=self.grad_clip_max
+            )
+        else:
+            torch.nn.utils.clip_grad_norm_(
+                self.model.parameters(), max_norm=self.grad_clip_max
+            )
+
+        self.optimizers.step()
+        self.schedulers.step()
+        self.exp_decay.update()
+
+        # no gradients needed anymore
+        loss = loss.detach()
+        with torch.no_grad():
+            # update molecule metrics
+            metrics.update_state(
+                nsamples=ddG_prediction.shape[0],
+                loss=loss
+            )
+
+        return loss
+
+    @torch.no_grad()
+    def pred_on_batch(self, batch):
+        inputs, targets = batch
+        wild_type, mutant = inputs
+        targets = targets[0]
+        wild_type, mutant, targets = self.dict2device(wild_type), self.dict2device(mutant), self.dict2device(targets)
+        ddG_prediction = self.predict(wild_type, mutant) # [nMolecules, num_targets]
+        return ddG_prediction, targets
+
 
 class EBMTrainer(Trainer):
     """

@@ -852,3 +852,135 @@ class GemNet(torch.nn.Module):
                 scale_grad(layer.weight, self.num_blocks)
             # output block is shared for +1 blocks
             scale_grad(self.mlp_rbf_out.weight, self.num_blocks + 1)
+
+
+
+class AtomDiffGemNet(GemNet):
+    """We adapt the gemnet to mutation change prediction task
+    by first aggregate the atom level embedding difference to molecule level embedding difference 
+    and then a output block maps the embedding difference to energy. 
+    """
+    def base_extract(self, inputs):
+        """
+        extract distance, angles and basis functions
+        """
+        # Calculate distances
+        D_ca, V_ca = self.calculate_interatomic_vectors(inputs["R"], inputs["id_c"], inputs["id_a"])
+
+        if not self.triplets_only:
+            D_ab, _ = self.calculate_interatomic_vectors(inputs["R"], inputs["id4_int_b"], inputs["id4_int_a"])
+
+            # Calculate angles
+            Phi_cab, Phi_abd, Theta_cabd = self.calculate_angles(
+                inputs["R"],
+                inputs["id_c"],
+                inputs["id_a"],
+                inputs["id4_int_b"],
+                inputs["id4_int_a"],
+                inputs["id4_expand_abd"],
+                inputs["id4_reduce_cab"],
+                inputs["id4_expand_intm_db"],
+                inputs["id4_reduce_intm_ca"],
+                inputs["id4_expand_intm_ab"],
+                inputs["id4_reduce_intm_ab"],
+            )
+
+            cbf4 = self.cbf_basis(D_ab, Phi_abd, inputs["id4_expand_intm_ab"], None)
+            sbf4 = self.sbf_basis(D_ca, Phi_cab, Theta_cabd, inputs["id4_reduce_ca"], inputs["Kidx4"])
+
+        rbf = self.rbf_basis(D_ca)
+        # Triplet Interaction
+        Angles3_cab = self.calculate_angles3(
+            inputs["R"], inputs["id_c"], inputs["id_a"], inputs["id3_reduce_ca"], inputs["id3_expand_ba"]
+        )
+        cbf3 = self.cbf_basis3(D_ca, Angles3_cab, inputs["id3_reduce_ca"], inputs["Kidx3"])
+
+        # Embedding block
+        h = self.atom_emb(inputs["Z"], inputs["residue_types"], inputs["chain_ids"])  # (nAtoms, emb_size_atom)
+        m = self.edge_emb(h, rbf, inputs["id_c"], inputs["id_a"])  # (nEdges, emb_size_edge)
+
+        # Shared Down Projections
+        if not self.triplets_only:
+            rbf4 = self.mlp_rbf4(rbf)
+            cbf4 = self.mlp_cbf4(cbf4)
+            sbf4 = self.mlp_sbf4(sbf4)
+        else:
+            rbf4 = None
+            cbf4 = None
+            sbf4 = None
+
+        rbf3 = self.mlp_rbf3(rbf)
+        cbf3 = self.mlp_cbf3(cbf3)
+
+        rbf_h = self.mlp_rbf_h(rbf)
+        rbf_out = self.mlp_rbf_out(rbf)
+
+        # pack output
+        out_dict = dict()
+        out_dict.update(inputs)
+        out_dict.update(dict(h=h, m=m, rbf4=rbf4,cbf4=cbf4, sbf4=sbf4, rbf3=rbf3,cbf3=cbf3,
+                             rbf_h=rbf_h, rbf_out=rbf_out))
+
+        return out_dict
+
+    def out_energy(self, inputs_wt, inputs_mt, output_layer=0):
+        """
+        atom level feature diff => readout => molecule level feature diff => MLP => energy  
+        """
+        wild_type_atom_feature = self.out_blocks[output_layer].atom_feature_extract(inputs_wt['h'], inputs_wt['m'], 
+                                            inputs_wt['rbf_out'], inputs_wt['id_a'])
+
+        mutant_atom_feature = self.out_blocks[output_layer].atom_feature_extract(inputs_mt['h'], inputs_mt['m'], 
+                                            inputs_mt['rbf_out'], inputs_mt['id_a'])
+
+        feature_diff = mutant_atom_feature - wild_type_atom_feature
+        # (nAtoms, emb_size_atom) => (nMolecule, emb_size_atom)
+        batch_seg = inputs_wt['batch_seg']
+        
+        nMolecules = torch.max(batch_seg) + 1
+        if self.extensive: # default is true, use scatter add
+            feature_diff = scatter(feature_diff, batch_seg, dim=0, dim_size=nMolecules, reduce="add") 
+        else:
+            feature_diff = scatter(feature_diff, batch_seg, dim=0, dim_size=nMolecules, reduce="mean")  
+
+        # (nMolecules, emb_size_atom) => (nMolecules, num_targets)
+        E_a = self.out_blocks[output_layer].out_energy(feature_diff)
+        return E_a
+
+    def interaction(self, inputs, layer=0):
+        h, m = self.int_blocks[layer](h=inputs['h'], m=inputs['m'],
+                    rbf4=inputs['rbf4'], cbf4=inputs['cbf4'], sbf4=inputs['sbf4'],
+                    Kidx4=inputs['Kidx4'], rbf3=inputs['rbf3'], cbf3=inputs['cbf3'],
+                    Kidx3=inputs['Kidx3'], id_swap=inputs['id_swap'],
+                    id3_expand_ba=inputs['id3_expand_ba'], id3_reduce_ca=inputs['id3_reduce_ca'],
+                    id4_reduce_ca=inputs['id4_reduce_ca'],
+                    id4_expand_intm_db=inputs['id4_expand_intm_db'],
+                    id4_expand_abd=inputs['id4_expand_abd'],
+                    rbf_h=inputs['rbf_h'],
+                    id_c=inputs['id_c'], id_a=inputs['id_a'],)
+        inputs.update(dict(h=h, m=m))
+        return inputs
+
+    def forward(self, inputs_wt, inputs_mt):
+        
+        base_dict_wild_type = self.base_extract(inputs_wt)
+        base_dict_mutant = self.base_extract(inputs_mt)
+
+        E_a = self.out_energy(base_dict_wild_type, base_dict_mutant, 0)
+
+        if self.energy_linear_map:
+            E_a = self.energy_map_blocks[0](E_a)
+        # (nAtoms, num_targets), (nEdges, num_targets)
+
+        for i in range(self.num_blocks):
+            # Interaction block
+            base_dict_wild_type = self.interaction(base_dict_wild_type, i)
+            base_dict_mutant = self.interaction(base_dict_mutant, i)
+            # Output block; E: (nMolecules, num_targets)
+            E = self.out_energy(base_dict_wild_type, base_dict_mutant, i + 1)
+            if self.energy_linear_map:
+                E = self.energy_map_blocks[i + 1](E)
+            # (nAtoms, num_targets),
+            E_a += E
+
+        return E_a # (nMolecules, num_targets)

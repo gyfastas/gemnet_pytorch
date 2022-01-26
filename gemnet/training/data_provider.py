@@ -135,4 +135,5 @@ class DataProvider:
         batch_sampler = BatchSampler(sampler, batch_size=batch_size, drop_last=True)
         loader = DataLoader(dataset, sampler=batch_sampler, num_workers=self.num_workers,
                                 collate_fn=self.data_container.collate_fn, pin_memory=True,)
+
         return loader

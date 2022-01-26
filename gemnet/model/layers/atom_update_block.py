@@ -154,15 +154,7 @@ class OutputBlock(AtomUpdateBlock):
         else:
             raise UserWarning(f"Unknown output_init: {self.output_init}")
 
-    def forward(self, h, m, rbf, id_j):
-        """
-        Returns
-        -------
-            (E, F): tuple
-            - E: Tensor, shape=(nAtoms, num_targets)
-            - F: Tensor, shape=(nEdges, num_targets)
-            Energy and force prediction
-        """
+    def atom_feature_extract(self, h, m, rbf, id_j, return_rbf=False):
         nAtoms = h.shape[0]
 
         rbf_mlp = self.dense_rbf(rbf)  # (nEdges, emb_size_edge)
@@ -174,6 +166,22 @@ class OutputBlock(AtomUpdateBlock):
 
         for i, layer in enumerate(self.seq_energy):
             x_E = layer(x_E)  # (nAtoms, emb_size_atom)
+
+        if return_rbf:
+            return x_E, x
+        else:
+            return x_E # (nAtoms, emb_size_atom)
+
+    def forward(self, h, m, rbf, id_j):
+        """
+        Returns
+        -------
+            (E, F): tuple
+            - E: Tensor, shape=(nAtoms, num_targets)
+            - F: Tensor, shape=(nEdges, num_targets)
+            Energy and force prediction
+        """
+        x_E, x = self.atom_feature_extract(h, m, rbf, id_j, return_rbf=True) # (nAtoms, emb_size_atom)
 
         x_E = self.out_energy(x_E)  # (nAtoms, num_targets)
 

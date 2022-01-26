@@ -15,7 +15,7 @@ from pathlib import Path
 from tqdm import tqdm
 import copy
 
-from gemnet.model.gemnet import GemNet
+from gemnet.model import gemnet 
 from gemnet.training import trainers
 from gemnet.training.metrics import Metrics, BestMetrics, spearmanr
 import gemnet.training.data_container as data_containers
@@ -124,7 +124,8 @@ class BaseRunner(object):
 
     def init_model(self):
         logging.info("Initialize model")
-        self.model = GemNet(**self.config.model)
+        model_class = self.config.model.pop("class", "GemNet")
+        self.model = getattr(gemnet, model_class)(**self.config.model)
 
     def init_data(self):
         logging.info("Building dataset")
