@@ -132,6 +132,7 @@ class DataProvider:
         dataset = Subset(self.data_container, self.idx[split])
         batch_size = batch_size if batch_size is not None else self.batch_size
         sampler = DistributedSampler(dataset, world_size, rank)
-        loader = DataLoader(dataset, self.batch_size, sampler=sampler, num_workers=self.num_workers,
+        batch_sampler = BatchSampler(sampler, batch_size=batch_size, drop_last=True)
+        loader = DataLoader(dataset, sampler=batch_sampler, num_workers=self.num_workers,
                                 collate_fn=self.data_container.collate_fn, pin_memory=True,)
         return loader
