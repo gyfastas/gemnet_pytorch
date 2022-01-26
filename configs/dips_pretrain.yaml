@@ -2,6 +2,7 @@ runner: "PretrainRunner"
 dataset_class: "EBMDataContainer"
 
 model:
+  class: "GemNet"
   num_spherical: 7
   num_radial: 6
   num_blocks: 4
@@ -59,6 +60,8 @@ trainer:
   log_iter: 5
 
 restart: null
+resume: null
+resume_epoch: null
 tfseed: 1234
 data_seed: 42
 comment: "GemNet"

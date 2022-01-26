@@ -124,7 +124,11 @@ class BaseRunner(object):
 
     def init_model(self):
         logging.info("Initialize model")
-        model_class = self.config.model.pop("class", "GemNet")
+        if "class" in self.config.model:
+            model_class = self.config.model.get("class")
+            self.config.model.pop("class")
+        else:
+            model_class = "GemNet"
         self.model = getattr(gemnet, model_class)(**self.config.model)
 
     def init_data(self):
@@ -171,20 +175,31 @@ class BaseRunner(object):
                                 metric_mode=self.config.metric_mode)
     
     def resume(self):
-        # Restore latest checkpoint
-        if os.path.exists(self.log_path_model):
-            logging.info("Restoring model and trainer")
-            model_checkpoint = torch.load(self.log_path_model, map_location=self.trainer.device)
+        if os.path.exists(self.config.get("resume", "")):
+            resume_dir = os.path.dirname(self.config.get("resume", ""))
+            resume_epoch = self.config.get("resume_epoch", None)
+            if resume_epoch is None:
+                model_path = os.path.join(resume_dir, "model.pth")
+                training_path = os.path.join(resume_dir, "training.pth")
+                resume_epoch = 0
+            else:
+                model_path = os.path.join(resume_dir, "model_{}.pth".format(resume_epoch))
+                training_path = os.path.join(resume_dir, "training_{}.pth".format(resume_epoch))
+
+            logging.info("Resume model and trainer from {}, epoch is {}".format(resume_dir, resume_epoch))
+    
+            model_checkpoint = torch.load(model_path, map_location=self.trainer.device)
             self.model.load_state_dict(model_checkpoint["model"])
 
-            train_checkpoint = torch.load(self.log_path_training, map_location=self.trainer.device)
+            train_checkpoint = torch.load(training_path, map_location=self.trainer.device)
             self.trainer.load_state_dict(train_checkpoint["trainer"])
             # restore the best saved results
-            self.metrics_best_val.restore()
-            logging.info(f"Restored best metrics: {self.metrics_best_val.loss}")
+            self.metrics_best_val.inititalize()
+            self.start_epoch = resume_epoch
         else:
             logging.info("Freshly initialize model")
             self.metrics_best_val.inititalize()
+            self.start_epoch = 0
 
     def run(self):
         raise NotImplementedError()
@@ -198,7 +213,7 @@ class DownStreamRunner(BaseRunner):
     def run(self):
         best_epoch = -1
 
-        for epoch in tqdm(range(self.config.num_epochs)):
+        for epoch in tqdm(range(self.start_epoch, self.config.num_epochs)):
             # Perform training step
             self.trainer.train_on_epoch(self.data_provider, self.train_metrics, self.config.iter_per_epoch)
             
@@ -277,7 +292,7 @@ class PretrainRunner(BaseRunner):
         pass
 
     def run(self):
-        for epoch in tqdm(range(self.config.num_epochs)):
+        for epoch in tqdm(range(self.start_epoch, self.config.num_epochs)):
             # prepare data, support re
             all_data_path = list()
             if isinstance(self.config.dataset, str):

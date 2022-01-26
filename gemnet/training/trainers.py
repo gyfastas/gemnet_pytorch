@@ -852,6 +852,13 @@ class EBMTrainer(Trainer):
 
         self.optimizers.zero_grad()
         loss.backward()
+        ## prevent nan gradient
+        for param in self.model.parameters():
+            if getattr(param, "grad", None) is not None:
+                if torch.isnan(param.grad).any():
+                    print("warning! found nan grad")
+                    param.grad.zero_()
+
         self.model.scale_shared_grads()
 
         if self.agc:
