@@ -821,7 +821,6 @@ class EBMTrainer(Trainer):
             agc=False,
             num_negative: int = 1,
             log_iter: int =20,
-            energy_scheme: str = "atom_energy",
     ):
         super(EBMTrainer, self).__init__(model, learning_rate, decay_steps, decay_rate, warmup_steps, weight_decay,
                                          staircase, grad_clip_max, decay_patience, decay_factor, decay_cooldown,
