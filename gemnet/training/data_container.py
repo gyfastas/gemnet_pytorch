@@ -692,6 +692,7 @@ class MutationPositionDataContainer(DataContainer):
         data["F"] = np.zeros([np.sum(data["N"]), 3], dtype=np.float32)
 
         data["residue_types"] = np.zeros(np.sum(data["N"]), dtype=np.int32)
+        data["residue_ids"] = np.zeros(np.sum(data["N"]), dtype=np.int32)
         data["chain_ids"] = np.zeros(np.sum(data["N"]), dtype=np.int32)
         data["mutate_center"] = np.zeros(np.sum(data["N"]), dtype=np.bool)
         data["is_mutant_residue"] = np.zeros(np.sum(data["N"]), dtype=np.bool)
@@ -726,6 +727,7 @@ class MutationPositionDataContainer(DataContainer):
             is_mutant_residue = is_mutant_residue[topk_indices]
             data["mutate_center"][nstart:nend] = mutate_center
             data["is_mutant_residue"][nstart:nend] = is_mutant_residue
+            data["residue_ids"][nstart:nend] = self.residue_ids[topk_indices]
 
             D_ij = np.linalg.norm(R[:, None, :] - R[None, :, :], axis=-1)
             # get adjacency matrix for embeddings

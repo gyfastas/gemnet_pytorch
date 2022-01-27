@@ -39,6 +39,7 @@ def save_feature(runner, split="test", save_path="./save_feature"):
     
     wild_type_atom_features, mutant_atom_features = list(), list()
     wild_type_is_mutant_residue, mutant_is_mutant_residue = list(), list()
+    wild_type_residue_ids, mutant_residue_ids = list(), list()
     loader = provider.get_loader(split)
     
     with torch.no_grad():
@@ -52,6 +53,10 @@ def save_feature(runner, split="test", save_path="./save_feature"):
             wild_type_is_mutant_residue.append(wild_type["is_mutant_residue"])
             mutant_is_mutant_residue.append(mutant["is_mutant_residue"])
 
+            ## extract the residue ids
+            wild_type_residue_ids.append(wild_type['residue_ids'])
+            mutant_residue_ids.append(mutant['residue_ids'])
+
     num_outputs = len(wild_type_atom_features[0])
 
     wild_type_atom_features = [torch.cat([x[i] for x in wild_type_atom_features], dim=0).cpu() for i in range(num_outputs)]
@@ -59,12 +64,15 @@ def save_feature(runner, split="test", save_path="./save_feature"):
     
     wild_type_is_mutant_residue = torch.stack(wild_type_is_mutant_residue, dim=0).cpu()
     mutant_is_mutant_residue = torch.stack(mutant_is_mutant_residue, dim=0).cpu()
+    wild_type_residue_ids = torch.stack(wild_type_residue_ids, dim=0).cpu()
+    mutant_residue_ids = torch.stack(mutant_residue_ids, dim=0).cpu()
 
     if not os.path.exists(save_path):
         os.makedirs(save_path, exist_ok=True)
     
     torch.save(dict(wt=wild_type_atom_features, mt=mutant_atom_features, 
-                    wt_label=wild_type_is_mutant_residue, mt_label=mutant_is_mutant_residue), os.path.join(save_path, "features.pth"))
+                    wt_label=wild_type_is_mutant_residue, mt_label=mutant_is_mutant_residue,
+                    wt_residue_ids=wild_type_residue_ids, mt_residue_ids=mutant_residue_ids), os.path.join(save_path, "features.pth"))
     
 
 if __name__ == "__main__":
