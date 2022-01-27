@@ -509,6 +509,7 @@ class DataContainer:
         dtypes_input["Z"] = torch.int64
         dtypes_input["N"] = torch.int64
         dtypes_input["R"] = torch.float32
+        dtypes_input["mutate_center"] = torch.bool
         for key in self.index_keys:
             dtypes_input[key] = torch.int64
 
@@ -692,6 +693,7 @@ class MutationPositionDataContainer(DataContainer):
 
         data["residue_types"] = np.zeros(np.sum(data["N"]), dtype=np.int32)
         data["chain_ids"] = np.zeros(np.sum(data["N"]), dtype=np.int32)
+        data["mutate_center"] = np.zeros(np.sum(data["N"]), dtype=np.bool)
 
         nend = 0
         adj_matrices = []
@@ -700,7 +702,7 @@ class MutationPositionDataContainer(DataContainer):
         for protein_id, residue_id, num_atom in zip(idx, data["mutation_position"], data["N"]):
             ## Note: we assume that the mutation_posistion has been packed to variadic.
             if self.pre_compute_topk:
-                topk_indices = self.topk_indices[protein_id] 
+                topk_indices = self.topk_indices[protein_id]
             else:
                 topk_indices = self.get_topk_atoms(protein_id, residue_id, num_atom)
             nstart = nend
@@ -713,6 +715,13 @@ class MutationPositionDataContainer(DataContainer):
 
             data["residue_types"][nstart:nend] = self.residue_types[self.residue_ids[topk_indices]]
             data["chain_ids"][nstart:nend] = self.relative_chain_ids[self.residue_ids[topk_indices]]
+            mutate_center = (self.residue_ids == residue_id) & (self.atom_ids == 4)
+            if mutate_center.sum() < 1:  # no beta carbon, use alpha carbon instead
+                mutate_center = (self.residue_ids == residue_id) & (self.atom_ids == 1)
+            mutate_center = mutate_center[topk_indices]
+            # For protection: select first `True`
+            mutate_center = np.arange(mutate_center.shape[0]) == np.nonzero(mutate_center)[0][0]
+            data["mutate_center"][nstart:nend] = mutate_center
 
             D_ij = np.linalg.norm(R[:, None, :] - R[None, :, :], axis=-1)
             # get adjacency matrix for embeddings

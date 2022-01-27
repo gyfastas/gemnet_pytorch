@@ -870,8 +870,8 @@ class AtomDiffGemNet(GemNet):
                                 aggregate the embedding difference of all atoms for MLP prediction.
             (2) "graph_diff": get the graph embedding of the atom systems before and after mutation;
                                 compute the graph embedding difference for MLP prediction.
-            (3) "cb_diff": get the embedding of the CB of mutate residue before and after mutation;
-                                compute the CB embedding difference for MLP prediction.
+            (3) "center_diff": get the embedding of the center of mutate residue before and after mutation;
+                                compute the center embedding difference for MLP prediction.
     """
     def base_extract(self, inputs):
         """
@@ -964,6 +964,12 @@ class AtomDiffGemNet(GemNet):
                 wild_type_graph_feature = scatter(wild_type_atom_feature, batch_seg, dim=0, dim_size=nMolecules, reduce="mean")
                 mutant_graph_feature = scatter(mutant_atom_feature, batch_seg, dim=0, dim_size=nMolecules, reduce="mean")
             feature_diff = mutant_graph_feature - wild_type_graph_feature
+        elif self.emb_diff_scheme == "center_diff":
+            mutate_center = inputs_wt["mutate_center"]
+            wild_type_center_feature = wild_type_atom_feature[mutate_center]
+            mutant_center_feature = mutant_atom_feature[mutate_center]
+            assert wild_type_center_feature.shape[0] == nMolecules and mutant_center_feature.shape[0] == nMolecules
+            feature_diff = mutant_center_feature - wild_type_center_feature
         else:
             raise ValueError("Embedding difference scheme {} is not supported.".format(self.emb_diff_scheme))
 
