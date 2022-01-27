@@ -129,6 +129,7 @@ class GemNet(torch.nn.Module):
         residue_embedding_scheme="add",
         energy_linear_map=False,
         emb_diff_scheme="atom_diff",
+        energy_scheme="atom_energy",
         **kwargs,
         ):
         super().__init__()
@@ -138,6 +139,7 @@ class GemNet(torch.nn.Module):
         self.extensive = extensive
         self.energy_linear_map = energy_linear_map
         self.emb_diff_scheme = emb_diff_scheme
+        self.energy_scheme = energy_scheme
 
         self.forces_coupled = forces_coupled
 
@@ -1015,3 +1017,57 @@ class AtomDiffGemNet(GemNet):
             E_a += E
 
         return E_a # (nMolecules, num_targets)
+
+
+class EBMGemNet(AtomDiffGemNet):
+    """
+    We adapt the gemnet to EBM pre-training, where we support different ways to get system energy.
+
+    Key parameters in this class:
+    ----------
+        energy_scheme: str
+            (1) "atom_energy": compute per-atom energy and then aggregate all atom energies in a system.
+            (2) "graph_energy": aggregate the embeddings of all atoms in a system/graph and then compute overall energy.
+            (3) "center_energy": retrieve the embedding of system center and then compute the system energy based on it.
+    """
+
+    def out_energy(self, inputs, output_layer=0):
+        atom_feature = self.out_blocks[output_layer].atom_feature_extract(inputs['h'], inputs['m'],
+                                                                          inputs['rbf_out'], inputs['id_a'])
+        # Compute system energy
+        # (nAtoms, emb_size_atom) => (nMolecule, num_targets)
+        batch_seg = inputs['batch_seg']
+        nMolecules = torch.max(batch_seg) + 1
+        if self.energy_scheme == "atom_energy":
+            atom_energy = self.out_blocks[output_layer].out_energy(atom_feature)
+            if self.extensive:
+                system_energy = scatter(atom_energy, batch_seg, dim=0, dim_size=nMolecules, reduce="add")
+            else:
+                system_energy = scatter(atom_energy, batch_seg, dim=0, dim_size=nMolecules, reduce="mean")
+        elif self.energy_scheme == "graph_energy":
+            if self.extensive:
+                graph_feature = scatter(atom_feature, batch_seg, dim=0, dim_size=nMolecules, reduce="add")
+            else:
+                graph_feature = scatter(atom_feature, batch_seg, dim=0, dim_size=nMolecules, reduce="mean")
+            system_energy = self.out_blocks[output_layer].out_energy(graph_feature)
+        elif self.energy_scheme == "center_energy":
+            center = inputs["mutate_center"]
+            center_feature = atom_feature[center]
+            assert center_feature.shape[0] == nMolecules
+            system_energy = self.out_blocks[output_layer].out_energy(center_feature)
+
+        return system_energy
+
+    def forward(self, inputs):
+        base_dict = self.base_extract(inputs)
+        E_a = self.out_energy(base_dict, 0)
+        if self.energy_linear_map:
+            E_a = self.energy_map_blocks[0](E_a)
+        for i in range(self.num_blocks):
+            base_dict = self.interaction(base_dict, i)
+            E = self.out_energy(base_dict, i + 1)
+            if self.energy_linear_map:
+                E = self.energy_map_blocks[i + 1](E)
+            E_a += E
+
+        return E_a  # (nMolecule, num_targets)

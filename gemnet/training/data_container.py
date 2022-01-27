@@ -770,7 +770,8 @@ class EBMDataContainer(DataContainer):
             "is_interface",
             "atom_ids", 
             "chain_ids", 
-            "num_residue"
+            "num_residue",
+            "mutate_center",
         ]
         if not triplets_only:
             self.index_keys += [
@@ -866,7 +867,11 @@ class EBMDataContainer(DataContainer):
         all_dist = ((atom_positions - target_residue_CB_position) ** 2).sum(-1)
         is_target_residue = (residue_ids == residue_id)
         all_dist[is_target_residue] = 0.0
-        topk_indices = np.argsort(all_dist)[:num_atom] + start
+        topk_indices = np.argsort(all_dist)[:num_atom]
+        # re-order topk indices according to distance towards rotation center
+        topk_dist = ((atom_positions[topk_indices] - target_residue_CB_position) ** 2).sum(-1)
+        topk_dist_order = topk_dist.argsort()
+        topk_indices = topk_indices[topk_dist_order] + start  # to variadic
         return topk_indices
 
     def compute_Phi(self, atom_positions, residue_ids, atom_ids, target_residue_id):
@@ -953,6 +958,7 @@ class EBMDataContainer(DataContainer):
 
         data["residue_types"] = np.zeros(np.sum(data["N"]), dtype=np.int32)
         data["chain_ids"] = np.zeros(np.sum(data["N"]), dtype=np.int32)
+        data["mutate_center"] = np.zeros(np.sum(data["N"]), dtype=np.bool)
 
         nend = 0
         adj_matrices = []
@@ -968,6 +974,13 @@ class EBMDataContainer(DataContainer):
 
             data["residue_types"][nstart:nend] = self.residue_types[self.residue_ids[topk_indices]]
             data["chain_ids"][nstart:nend] = self.chain_ids[self.residue_ids[topk_indices]]
+            mutate_center = (self.residue_ids == residue_id) & (self.atom_ids == 4)
+            if mutate_center.sum() < 1:  # no beta carbon, use alpha carbon instead
+                mutate_center = (self.residue_ids == residue_id) & (self.atom_ids == 1)
+            mutate_center = mutate_center[topk_indices]
+            # For protection: select first `True`
+            mutate_center = np.arange(mutate_center.shape[0]) == np.nonzero(mutate_center)[0][0]
+            data["mutate_center"][nstart:nend] = mutate_center
 
             D_ij = np.linalg.norm(R[:, None, :] - R[None, :, :], axis=-1)
             # get adjacency matrix for embeddings
@@ -1000,6 +1013,7 @@ class EBMDataContainer(DataContainer):
             negative_data["F"] = np.zeros([np.sum(negative_data["N"]), 3], dtype=np.float32)
             negative_data["residue_types"] = np.zeros(np.sum(negative_data["N"]), dtype=np.int32)
             negative_data["chain_ids"] = np.zeros(np.sum(negative_data["N"]), dtype=np.int32)
+            negative_data["mutate_center"] = np.zeros(np.sum(negative_data["N"]), dtype=np.bool)
             
             nend = 0
             for protein_id, sampled_residue_index, num_atom in zip(idx, negative_data["sampled_residue"], negative_data["N"]):
@@ -1015,6 +1029,13 @@ class EBMDataContainer(DataContainer):
 
                 negative_data["residue_types"][nstart:nend] = self.residue_types[self.residue_ids[topk_indices]]
                 negative_data["chain_ids"][nstart:nend] = self.chain_ids[self.residue_ids[topk_indices]]
+                mutate_center = (self.residue_ids == sampled_residue_index) & (self.atom_ids == 4)
+                if mutate_center.sum() < 1:  # no beta carbon, use alpha carbon instead
+                    mutate_center = (self.residue_ids == sampled_residue_index) & (self.atom_ids == 1)
+                mutate_center = mutate_center[topk_indices]
+                # For protection: select first `True`
+                mutate_center = np.arange(mutate_center.shape[0]) == np.nonzero(mutate_center)[0][0]
+                negative_data["mutate_center"][nstart:nend] = mutate_center
 
                 D_ij = np.linalg.norm(R[:, None, :] - R[None, :, :], axis=-1)
                 # get adjacency matrix for embeddings

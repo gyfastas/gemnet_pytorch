@@ -821,6 +821,7 @@ class EBMTrainer(Trainer):
             agc=False,
             num_negative: int = 1,
             log_iter: int =20,
+            energy_scheme: str = "atom_energy",
     ):
         super(EBMTrainer, self).__init__(model, learning_rate, decay_steps, decay_rate, warmup_steps, weight_decay,
                                          staircase, grad_clip_max, decay_patience, decay_factor, decay_cooldown,
@@ -831,6 +832,12 @@ class EBMTrainer(Trainer):
     def tracked_metrics(self):
         return ["loss", "energy_mae", "force_mae", "force_rmse", "log_likelihood"]
 
+    def predict(self, inputs, model=None):
+        if model is None:
+            model = self.model
+        energy = model(inputs)
+        return energy
+
     def get_log_likelihood(self, all_energy, eps=1e-6):
         all_energy = all_energy.view(-1).view(self.num_negative + 1, -1).permute(1, 0)  # (B, N_neg + 1)
         labels = torch.zeros(all_energy.shape[0], dtype=torch.long, device=all_energy.device)
@@ -838,7 +845,8 @@ class EBMTrainer(Trainer):
 
     def forwrad_and_backward(self, model, metrics, inputs, targets):
         inputs, targets = self.dict2device(inputs), self.dict2device(targets)
-        mean_energy, var_energy, mean_forces, var_forces = self.predict(inputs, model)
+        mean_energy = self.predict(inputs)
+        mean_forces = torch.zeros_like(targets["F"])
         energy_mae = self.get_mae(targets["E"], mean_energy)
         force_mae = self.get_mae(targets["F"], mean_forces)
         log_likelihood = self.get_log_likelihood(mean_energy)
