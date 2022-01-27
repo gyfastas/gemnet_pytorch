@@ -947,6 +947,9 @@ class AtomDiffGemNet(GemNet):
 
         mutant_atom_feature = self.out_blocks[output_layer].atom_feature_extract(inputs_mt['h'], inputs_mt['m'], 
                                             inputs_mt['rbf_out'], inputs_mt['id_a'])
+        ## update input dict for other usage (for example, visualization)
+        inputs_wt["atom_feature"].append(wild_type_atom_feature)
+        inputs_mt["atom_feature"].append(mutant_atom_feature)
 
         # Compute embedding difference
         # (nAtoms, emb_size_atom) => (nMolecule, emb_size_atom)
@@ -994,10 +997,13 @@ class AtomDiffGemNet(GemNet):
         inputs.update(dict(h=h, m=m))
         return inputs
 
-    def forward(self, inputs_wt, inputs_mt):
+    def forward(self, inputs_wt, inputs_mt, return_output=False):
         
         base_dict_wild_type = self.base_extract(inputs_wt)
         base_dict_mutant = self.base_extract(inputs_mt)
+
+        base_dict_wild_type.update({"atom_feature": list()})
+        base_dict_mutant.update({"atom_feature": list()})
 
         E_a = self.out_energy(base_dict_wild_type, base_dict_mutant, 0)
 
@@ -1015,8 +1021,10 @@ class AtomDiffGemNet(GemNet):
                 E = self.energy_map_blocks[i + 1](E)
             # (nAtoms, num_targets),
             E_a += E
-
-        return E_a # (nMolecules, num_targets)
+        if return_output:
+            return E_a, base_dict_wild_type, base_dict_mutant
+        else:
+            return E_a # (nMolecules, num_targets)
 
 
 class EBMGemNet(AtomDiffGemNet):

@@ -592,7 +592,7 @@ class MutationPositionDataContainer(DataContainer):
         self.index_keys = [
             "batch_seg", "id_undir", "id_swap", "id_c", "id_a", "id3_expand_ba",
             "id3_reduce_ca", "Kidx3", "sampled_residue", "residue_ids", "residue_types","atom_ids", "mutation_position", 
-            "chain_ids", "relative_chain_ids", "num_residue"]
+            "chain_ids", "relative_chain_ids", "num_residue", "is_mutant_residue"]
         if not triplets_only:
             self.index_keys += [
                 "id4_int_b", "id4_int_a", "id4_reduce_ca", "id4_expand_db", "id4_reduce_cab",
@@ -694,6 +694,7 @@ class MutationPositionDataContainer(DataContainer):
         data["residue_types"] = np.zeros(np.sum(data["N"]), dtype=np.int32)
         data["chain_ids"] = np.zeros(np.sum(data["N"]), dtype=np.int32)
         data["mutate_center"] = np.zeros(np.sum(data["N"]), dtype=np.bool)
+        data["is_mutant_residue"] = np.zeros(np.sum(data["N"]), dtype=np.bool)
 
         nend = 0
         adj_matrices = []
@@ -721,7 +722,10 @@ class MutationPositionDataContainer(DataContainer):
             mutate_center = mutate_center[topk_indices]
             # For protection: select first `True`
             mutate_center = np.arange(mutate_center.shape[0]) == np.nonzero(mutate_center)[0][0]
+            is_mutant_residue = (self.residue_ids == residue_id)
+            is_mutant_residue = is_mutant_residue[topk_indices]
             data["mutate_center"][nstart:nend] = mutate_center
+            data["is_mutant_residue"][nstart:nend] = is_mutant_residue
 
             D_ij = np.linalg.norm(R[:, None, :] - R[None, :, :], axis=-1)
             # get adjacency matrix for embeddings
@@ -772,6 +776,7 @@ class EBMDataContainer(DataContainer):
             "chain_ids", 
             "num_residue",
             "mutate_center",
+            "is_mutant_residue"
         ]
         if not triplets_only:
             self.index_keys += [
