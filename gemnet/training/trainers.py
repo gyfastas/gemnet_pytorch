@@ -747,6 +747,36 @@ class PairwiseDDGTrainer(DDGTrainer):
     threshold = 0.1
     eps = 1e-10
 
+    def eval_on_epoch(self, data_provider, metrics, split="val"):
+        data_loader = data_provider.get_loader(split)
+        self.model.eval()
+        with torch.no_grad():
+            all_energies = list()
+            all_targets = list()
+            loss_cnt = 0.
+            pair_cnt = 0.
+            for batch in tqdm(data_loader):
+                inputs, targets = batch
+                energy, targets = self.pred_on_batch(batch)
+
+                energy_ = energy.view(-1)
+                pred_diff = energy_.unsqueeze(-1) - energy_.unsqueeze(0)  # (N, N)
+                target_energy = targets["E"].view(-1)
+                target_diff = target_energy.unsqueeze(-1) - target_energy.unsqueeze(0)  # (N, N)
+                target_diff = (target_diff > self.threshold).float()
+                loss = F.binary_cross_entropy_with_logits(pred_diff, target_diff, reduction="none")
+                mask = (target_diff.abs() > self.threshold).float()
+                loss_cnt += (mask * loss).sum()
+                pair_cnt += mask.sum()
+
+                all_energies.append(energy)
+                all_targets.append(targets["E"])
+
+        results = self.evaluate(torch.cat(all_energies).view(-1), torch.cat(all_targets).view(-1))
+        loss = loss_cnt / pair_cnt
+        results["loss"] = loss
+        metrics.update_state(**results)
+
     def forwrad_and_backward(self, model, metrics, inputs, targets):
         inputs_wt, inputs_mt = inputs
         targets, targets_1 = targets
