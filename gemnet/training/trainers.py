@@ -6,6 +6,7 @@ from .ema_decay import ExponentialMovingAverage
 from gemnet.utils import dist_utils, training_utils
 from gemnet.training import metrics
 import torch.nn as nn
+import torch.nn.functional as F
 from itertools import islice
 import torch.distributed as dist
 from tqdm import tqdm
@@ -736,6 +737,64 @@ class DDGTrainer(Trainer):
         metric_dict["spearman"] = rho
         metric_dict["nsamples"] = pred.shape[0]
         return metric_dict
+
+
+class PairwiseDDGTrainer(DDGTrainer):
+    """
+    Train DDG predictor by comparing (wild_type, mutant) pairs.
+    """
+
+    threshold = 0.1
+    eps = 1e-10
+
+    def forwrad_and_backward(self, model, metrics, inputs, targets):
+        inputs_wt, inputs_mt = inputs
+        targets, targets_1 = targets
+        # push to GPU if available
+        inputs_wt, inputs_mt, targets, targets_1 = self.dict2device(inputs_wt), self.dict2device(inputs_mt), self.dict2device(targets), self.dict2device(targets_1)
+        mean_energy_wt, var_energy_wt, mean_forces_wt, var_forces_wt = self.predict(inputs_wt, model)
+        mean_energy_mt, var_energy_mt, mean_forces_mt, var_forces_mt = self.predict(inputs_mt, model)
+        mean_energy = (mean_energy_mt - mean_energy_wt).view(-1)
+        pred_diff = mean_energy.unsqueeze(-1) - mean_energy.unsqueeze(0)  # (N, N)
+        target_energy = targets["E"].view(-1)
+        target_diff = target_energy.unsqueeze(-1) - target_energy.unsqueeze(0)  # (N, N)
+        target_diff = (target_diff > self.threshold).float()
+        loss = F.binary_cross_entropy_with_logits(pred_diff, target_diff, reduction="none")
+        mask = (target_diff.abs() > self.threshold).float()
+        loss = (mask * loss).sum() / (mask.sum() + self.eps)
+
+        force_loss = self.get_mae(targets["F"], mean_forces_wt)
+        force_loss1 = self.get_mae(targets_1["F"], mean_forces_mt)
+        loss = loss + 0.0 * force_loss + 0.0 * force_loss1
+
+        self.optimizers.zero_grad()
+        loss.backward()
+        self.model.scale_shared_grads()
+
+        if self.agc:
+            training_utils.adaptive_gradient_clipping(
+                self.params_except_last, clip_factor=self.grad_clip_max
+            )
+        else:
+            torch.nn.utils.clip_grad_norm_(
+                self.model.parameters(), max_norm=self.grad_clip_max
+            )
+
+        self.optimizers.step()
+        self.schedulers.step()
+        self.exp_decay.update()
+
+        # no gradients needed anymore
+        loss = loss.detach()
+        with torch.no_grad():
+            # update molecule metrics
+            metrics.update_state(
+                nsamples=mean_energy.shape[0],
+                loss=loss,
+            )
+
+        return loss
+
 
 class DDGAtomDiffTrainer(DDGTrainer):
     """Trainer that use atom embedding diff with an MLP to predict the ddG change.
